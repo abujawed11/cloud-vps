@@ -396,9 +396,9 @@ new Worker('transcode', async (job) => {
     '-y','-i', src,
     '-filter_complex',
       "[0:v]split=3[v1][v2][v3];" +
-      "[v1]scale=w=1920:h=-1:force_original_aspect_ratio=decrease[v1o];" +
-      "[v2]scale=w=1280:h=-1:force_original_aspect_ratio=decrease[v2o];" +
-      "[v3]scale=w=854:h=-1:force_original_aspect_ratio=decrease[v3o]",
+      "[v1]scale=w=1920:h=-2:force_original_aspect_ratio=decrease[v1o];" +
+      "[v2]scale=w=1280:h=-2:force_original_aspect_ratio=decrease[v2o];" +
+      "[v3]scale=w=854:h=-2:force_original_aspect_ratio=decrease[v3o]",
     // 1080p
     '-map','[v1o]','-map','0:a:0?','-c:v','h264','-b:v','6000k','-maxrate','6500k','-bufsize','12000k','-c:a','aac','-b:a','192k',
     '-f','hls','-hls_time','6','-hls_playlist_type','vod','-hls_segment_filename', path.join(outDir,'1080p_%03d.ts'),
