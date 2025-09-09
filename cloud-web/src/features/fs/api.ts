@@ -148,7 +148,7 @@ export async function moveOne(src: string, dest: string, overwrite = true) {
 export async function copyOne(src: string, dest: string, overwrite = true) {
   try {
     await api.post("/fs/mv", { src, dest, overwrite, copy: true })
-  } catch (e) {
+  } catch {
     try {
       await api.post("/fs/cp", { src, dest, overwrite })
     } catch {
