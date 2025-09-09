@@ -140,20 +140,37 @@ export default function Explorer() {
   /* ---------- cut/copy/paste ---------- */
   function onCopy() {
     if (!selectedCount) return
-    setClipboard({ mode: "copy", items: Array.from(selected), sourceDir: path })
+    const items = Array.from(selected)
+    console.log('Copy items to clipboard:', items)
+    setClipboard({ mode: "copy", items, sourceDir: path })
+    alert(`Copied ${items.length} item(s) to clipboard`)
   }
   function onCut() {
     if (!selectedCount) return
-    setClipboard({ mode: "cut", items: Array.from(selected), sourceDir: path })
+    const items = Array.from(selected)
+    console.log('Cut items to clipboard:', items)
+    setClipboard({ mode: "cut", items, sourceDir: path })
+    alert(`Cut ${items.length} item(s) to clipboard`)
   }
   async function onPaste() {
     if (!clipboard) return
     setBusy(clipboard.mode === "cut" ? "Moving…" : "Copying…")
     try {
-      // If pasting into the same folder & mode is cut, it's a no-op (unless rename), but we still try move to refresh location.
+      console.log('Paste operation:', clipboard)
+      console.log('Current path:', path)
+      
       for (const src of clipboard.items) {
         const name = src.split("/").filter(Boolean).pop()!
         const dest = joinPath(path, name)
+        
+        console.log(`${clipboard.mode === "cut" ? "Moving" : "Copying"}: "${src}" -> "${dest}"`)
+        
+        // Skip if source and destination are the same (same folder, same name)
+        if (src === dest) {
+          console.log(`Skipping ${src} - source and destination are the same`)
+          continue
+        }
+        
         if (clipboard.mode === "cut") {
           await moveOne(src, dest, true)
         } else {
@@ -166,8 +183,10 @@ export default function Explorer() {
         qc.invalidateQueries({ queryKey: ["fs:list", clipboard.sourceDir] })
       }
       clearSelection()
-    } catch (e: any) {
-      alert(e?.message || "Paste failed")
+      alert(`${clipboard.mode === "cut" ? "Move" : "Copy"} operation completed successfully`)
+    } catch (error) {
+      console.error('Paste failed:', error)
+      alert((error as Error)?.message || "Paste failed")
     } finally {
       setBusy(null)
     }
@@ -179,14 +198,23 @@ export default function Explorer() {
     const only = Array.from(selected)[0]
     const curDir = parentOf(only)
     const oldName = only.split("/").filter(Boolean).pop()!
+    
+    console.log('Rename operation:')
+    console.log('  Full path:', only)
+    console.log('  Current dir:', curDir)
+    console.log('  Old name:', oldName)
+    console.log('  New name:', newName)
+    
     setBusy("Renaming…")
     try {
       await renameOne(curDir, oldName, newName)
       setShowRename(false)
       clearSelection()
       qc.invalidateQueries({ queryKey: ["fs:list", path] })
-    } catch {
-      alert("Rename failed")
+      alert(`Successfully renamed "${oldName}" to "${newName}"`)
+    } catch (error) {
+      console.error('Rename failed:', error)
+      alert("Rename failed: " + (error as Error)?.message)
     } finally {
       setBusy(null)
     }
@@ -195,17 +223,25 @@ export default function Explorer() {
     if (!selectedCount) return
     setBusy("Moving…")
     try {
+      console.log('Move operation:')
+      console.log('  Destination directory:', destDir)
+      console.log('  Items to move:', Array.from(selected))
+      
       for (const src of Array.from(selected)) {
         const name = src.split("/").filter(Boolean).pop()!
         const dest = joinPath(destDir, name)
+        
+        console.log(`  Moving: "${src}" -> "${dest}"`)
         await moveOne(src, dest, true)
       }
       setShowMove(false)
       clearSelection()
       qc.invalidateQueries({ queryKey: ["fs:list", path] })
       if (destDir !== path) qc.invalidateQueries({ queryKey: ["fs:list", destDir] })
-    } catch {
-      alert("Move failed")
+      alert(`Successfully moved ${selectedCount} item(s) to ${destDir}`)
+    } catch (error) {
+      console.error('Move failed:', error)
+      alert("Move failed: " + (error as Error)?.message)
     } finally {
       setBusy(null)
     }

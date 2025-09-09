@@ -125,7 +125,65 @@ app.post('/fs/rm', auth, async (req, res) => {
         res.status(400).json({ error: e.message });
     }
 });
-app.post('/fs/mv', auth, async (req, res) => { try { await fs.rename(safe(req.body.from), safe(req.body.to)); res.json({ ok: true }); } catch (e) { res.status(400).json({ error: e.message }); } });
+app.post('/fs/mv', auth, async (req, res) => {
+    try {
+        const { from, to, src, dest, copy = false } = req.body;
+        const sourcePath = safe(from || src);
+        const destPath = safe(to || dest);
+        
+        console.log(`${copy ? 'Copy' : 'Move'}: "${sourcePath}" -> "${destPath}"`);
+        
+        if (copy) {
+            // Copy operation using cp command or fs.cp
+            const { exec } = require('child_process');
+            await new Promise((resolve, reject) => {
+                exec(`cp -r "${sourcePath}" "${destPath}"`, (error, stdout, stderr) => {
+                    if (error) {
+                        console.error('Copy error:', error, stderr);
+                        reject(error);
+                    } else {
+                        resolve(stdout);
+                    }
+                });
+            });
+        } else {
+            // Move/rename operation
+            await fs.rename(sourcePath, destPath);
+        }
+        
+        res.json({ ok: true });
+    } catch (e) {
+        console.error('Move/Copy error:', e.message);
+        res.status(400).json({ error: e.message });
+    }
+});
+
+app.post('/fs/cp', auth, async (req, res) => {
+    try {
+        const { from, to, src, dest } = req.body;
+        const sourcePath = safe(from || src);
+        const destPath = safe(to || dest);
+        
+        console.log(`Copy: "${sourcePath}" -> "${destPath}"`);
+        
+        const { exec } = require('child_process');
+        await new Promise((resolve, reject) => {
+            exec(`cp -r "${sourcePath}" "${destPath}"`, (error, stdout, stderr) => {
+                if (error) {
+                    console.error('Copy error:', error, stderr);
+                    reject(error);
+                } else {
+                    resolve(stdout);
+                }
+            });
+        });
+        
+        res.json({ ok: true });
+    } catch (e) {
+        console.error('Copy error:', e.message);
+        res.status(400).json({ error: e.message });
+    }
+});
 
 // --------- Upload ----------
 app.post('/fs/upload', auth, upload.single('file'), async (req, res) => {
