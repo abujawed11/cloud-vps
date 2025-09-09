@@ -1,0 +1,25 @@
+/* src/styles/globals.css (Tailwind v4) */
+@import "tailwindcss";
+
+/* Optional: your White + Blue tokens */
+@theme {
+  --color-brand: #2563EB;        /* primary */
+  --color-brand-dark: #1E40AF;   /* hover/active */
+  --color-brand-light: #93C5FD;  /* accents */
+
+  --color-background: #FFFFFF;   /* page bg */
+  --color-background-muted: #F9FAFB;
+
+  --color-text: #111827;         /* gray-900 */
+  --color-text-muted: #6B7280;   /* gray-500 */
+
+  --radius: 0.75rem;             /* optional shared radius */
+}
+
+/* (Optional) convenience utility you can use as `class="container"` */
+@utility container {
+  margin-inline: auto;
+  padding-inline: 1rem;
+  width: 100%;
+  max-width: 1200px;
+}
