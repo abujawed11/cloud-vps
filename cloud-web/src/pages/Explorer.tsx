@@ -473,7 +473,7 @@ export default function Explorer() {
                   <button className="w-6" onClick={()=>toggleSelect(p)} title={checked ? "Unselect" : "Select"}>
                     {isDir ? "📁" : "📄"}
                   </button>
-                  <button className="flex-1 text-left" onClick={() => open(entry)}>
+                  <button className="flex-1 text-left" onDoubleClick={() => open(entry)}>
                     {entry.name}
                   </button>
                   {!isDir && typeof entry.size === "number" && (
