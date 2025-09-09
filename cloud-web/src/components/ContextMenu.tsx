@@ -1,9 +1,9 @@
 import { useEffect, useRef, useState } from "react"
 
 export type ContextMenuItem = {
-  label: string
+  label?: string
   icon?: string
-  onClick: () => void
+  onClick?: () => void
   disabled?: boolean
   divider?: boolean
 }
@@ -75,21 +75,23 @@ export function ContextMenu({ x, y, onClose, items }: ContextMenuProps) {
           {item.divider && (
             <div className="my-1 h-px bg-gray-200" />
           )}
-          <button
-            className={`flex w-full items-center gap-2 px-3 py-2 text-left text-sm hover:bg-gray-100 ${
-              item.disabled ? 'cursor-not-allowed opacity-50' : ''
-            }`}
-            onClick={() => {
-              if (!item.disabled) {
-                item.onClick()
-                onClose()
-              }
-            }}
-            disabled={item.disabled}
-          >
-            {item.icon && <span>{item.icon}</span>}
-            <span>{item.label}</span>
-          </button>
+          {!item.divider && (
+            <button
+              className={`flex w-full items-center gap-2 px-3 py-2 text-left text-sm hover:bg-gray-100 ${
+                item.disabled ? 'cursor-not-allowed opacity-50' : ''
+              }`}
+              onClick={() => {
+                if (!item.disabled && item.onClick) {
+                  item.onClick()
+                  onClose()
+                }
+              }}
+              disabled={item.disabled}
+            >
+              {item.icon && <span>{item.icon}</span>}
+              <span>{item.label || ''}</span>
+            </button>
+          )}
         </div>
       ))}
     </div>

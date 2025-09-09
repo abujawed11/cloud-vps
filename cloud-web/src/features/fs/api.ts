@@ -103,11 +103,31 @@ export async function remoteDownload(url: string, destPath: string, transcode?: 
 // Tries { paths: string[] } first; if the backend only accepts single { path }, falls back per-item.
 export async function removePaths(paths: string[]) {
   if (paths.length === 0) return
+  
+  console.log('removePaths called with:', paths)
+  
   try {
     await api.post("/fs/rm", { paths })
-  } catch {
+  } catch (batchError) {
+    console.log('Batch delete failed, trying individual deletes:', batchError)
     // fallback: send individually
-    await Promise.all(paths.map((p) => api.post("/fs/rm", { path: p })))
+    const results = await Promise.allSettled(paths.map(async (p) => {
+      console.log('Deleting individual path:', p)
+      try {
+        const response = await api.post("/fs/rm", { path: p })
+        console.log('Successfully deleted:', p, response)
+        return response
+      } catch (error) {
+        console.error('Failed to delete:', p, error)
+        throw error
+      }
+    }))
+    
+    const failures = results.filter((r): r is PromiseRejectedResult => r.status === 'rejected')
+    if (failures.length > 0) {
+      console.error('Some deletes failed:', failures)
+      throw new Error(`Failed to delete ${failures.length} items: ${failures.map(f => f.reason?.message || 'Unknown error').join(', ')}`)
+    }
   }
 }
 

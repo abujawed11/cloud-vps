@@ -52,8 +52,11 @@ app.get('/health', (_req, res) => res.json({ ok: true }));
 
 // --------- Helpers ----------
 const safe = (rel) => {
-    const p = path.join(ROOT, rel || '/');
+    // Remove leading slash to ensure relative path behavior
+    const cleanRel = (rel || '/').replace(/^\/+/, '');
+    const p = path.join(ROOT, cleanRel);
     if (!p.startsWith(ROOT)) throw new Error('Unsafe path');
+    console.log(`safe() - input: "${rel}" -> cleaned: "${cleanRel}" -> result: "${p}"`);
     return p;
 };
 const norm = (p) => (p || '/').replace(/\/+/g, '/');
@@ -105,7 +108,23 @@ app.put('/fs/text', auth, async (req, res) => {
 
 // --------- mkdir / rm / mv ----------
 app.post('/fs/mkdir', auth, async (req, res) => { try { await fs.mkdir(safe(req.body.path), { recursive: true }); res.json({ ok: true }); } catch (e) { res.status(400).json({ error: e.message }); } });
-app.post('/fs/rm', auth, async (req, res) => { try { await fs.rm(safe(req.body.path), { recursive: true, force: true }); res.json({ ok: true }); } catch (e) { res.status(400).json({ error: e.message }); } });
+app.post('/fs/rm', auth, async (req, res) => {
+    try {
+        const targetPath = safe(req.body.path);
+        
+        // Additional safety: never allow deleting the ROOT directory itself
+        if (targetPath === ROOT) {
+            throw new Error('Cannot delete root storage directory');
+        }
+        
+        console.log(`Deleting path: ${targetPath}`);
+        await fs.rm(targetPath, { recursive: true, force: true });
+        res.json({ ok: true });
+    } catch (e) {
+        console.error('Delete error:', e.message);
+        res.status(400).json({ error: e.message });
+    }
+});
 app.post('/fs/mv', auth, async (req, res) => { try { await fs.rename(safe(req.body.from), safe(req.body.to)); res.json({ ok: true }); } catch (e) { res.status(400).json({ error: e.message }); } });
 
 // --------- Upload ----------

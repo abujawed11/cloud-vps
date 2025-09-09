@@ -38,7 +38,7 @@ export default function Explorer() {
   const [selected, setSelected] = useState<Set<string>>(new Set())
   const allPaths = useMemo(() => entries.map(e => e.path || joinPath(path, e.name)), [entries, path])
   const selectedCount = selected.size
-  const { showContextMenu, hideContextMenu, ContextMenuComponent } = useContextMenu()
+  const { showContextMenu, ContextMenuComponent } = useContextMenu()
 
   function toggleSelect(p: string) {
     setSelected(prev => {
@@ -215,12 +215,48 @@ export default function Explorer() {
     setBusy("Deleting…")
     try {
       const pathsToDelete = Array.from(selected)
-      console.log('Deleting paths:', pathsToDelete)
-      await deleteMut.mutateAsync(pathsToDelete)
+      
+      // Validation: ensure we're not deleting parent directories
+      console.log('Current directory:', path)
+      console.log('Paths to delete:', pathsToDelete)
+      
+      // Check if any path is a parent of the current directory
+      const currentDir = path.endsWith('/') ? path : path + '/'
+      const dangerousPaths = pathsToDelete.filter(p => {
+        const pathToCheck = p.endsWith('/') ? p : p + '/'
+        return currentDir.startsWith(pathToCheck) && pathToCheck !== currentDir
+      })
+      
+      if (dangerousPaths.length > 0) {
+        alert(`Cannot delete parent directories: ${dangerousPaths.join(', ')}`)
+        return
+      }
+      
+      // Additional validation: ensure paths are children of current directory or absolute paths to files
+      const validPaths = pathsToDelete.filter(p => {
+        // Allow absolute paths that are clearly files/folders
+        if (p.startsWith('/') && !currentDir.startsWith(p + '/')) {
+          return true
+        }
+        // Ensure path is in current directory
+        return p.startsWith(currentDir) || p.startsWith(path)
+      })
+      
+      if (validPaths.length !== pathsToDelete.length) {
+        console.warn('Some paths filtered out:', pathsToDelete.filter(p => !validPaths.includes(p)))
+      }
+      
+      if (validPaths.length === 0) {
+        alert('No valid paths to delete')
+        return
+      }
+      
+      console.log('Validated paths to delete:', validPaths)
+      await deleteMut.mutateAsync(validPaths)
       setShowDelete(false)
-    } catch (e) {
-      console.error('Delete failed:', e)
-      alert("Delete failed: " + (e as Error)?.message)
+    } catch (error) {
+      console.error('Delete failed:', error)
+      alert("Delete failed: " + (error as Error)?.message)
     } finally {
       setBusy(null)
     }
@@ -231,9 +267,9 @@ export default function Explorer() {
     try {
       setBusy("Downloading…")
       await downloadFile(filePath)
-    } catch (e) {
-      console.error('Download failed:', e)
-      alert("Download failed: " + (e as Error)?.message)
+    } catch (error) {
+      console.error('Download failed:', error)
+      alert("Download failed: " + (error as Error)?.message)
     } finally {
       setBusy(null)
     }
@@ -351,7 +387,9 @@ export default function Explorer() {
         >
           {entries.map((e) => {
             const isDir = e.type === "dir" || e.isDir || e.isDirectory
+            // Fix path construction - ensure we use the proper full path
             const p = e.path || joinPath(path, e.name)
+            console.log(`File: ${e.name}, Current Path: ${path}, Constructed Path: ${p}`)
             const checked = selected.has(p)
             return (
               <div 
