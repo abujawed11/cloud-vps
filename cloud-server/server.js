@@ -351,7 +351,10 @@ app.listen(PORT, () => console.log('API listening on :' + PORT));
 
 
 
-//Remote download endpoint
+// In-memory remote download tracking
+const remoteDownloads = new Map(); // id -> { id, url, filename, destRel, progress, state, error }
+
+//Remote download endpoint (synchronous legacy)
 
 app.post('/remote/download', auth, async (req, res) => {
     try {
@@ -432,3 +435,94 @@ app.post('/remote/download', auth, async (req, res) => {
     }
 });
 
+// Start remote download (async, with progress)
+app.post('/remote/start', auth, async (req, res) => {
+    try {
+        const rawUrl = (req.body?.url || '').trim();
+        const destRel = norm(req.body?.dest || '/');
+        const transcode = !!req.body?.transcode;
+
+        const safeUrl = await assertSafeHttpUrl(rawUrl);
+
+        // Determine filename first (best effort)
+        let head;
+        try {
+            head = await got.head(safeUrl, { timeout: { request: 15000 }, headers: { 'user-agent': 'Mozilla/5.0' } });
+        } catch {
+            try {
+                head = await got(safeUrl, { method: 'GET', throwHttpErrors: false, timeout: { request: 15000 }, headers: { 'user-agent': 'Mozilla/5.0' } });
+            } catch {}
+        }
+        let filename = null;
+        const cd = head?.headers?.['content-disposition'];
+        if (cd) {
+            try { const parsed = contentDisposition.parse(cd); filename = parsed.parameters['filename*'] || parsed.parameters.filename || null; } catch {}
+        }
+        if (!filename) {
+            const u = new URL(safeUrl);
+            const last = decodeURIComponent((u.pathname.split('/').pop() || '').trim());
+            filename = last || 'download.bin';
+        }
+
+        const id = `${Date.now().toString(36)}_${Math.random().toString(36).slice(2,8)}`;
+        remoteDownloads.set(id, { id, url: safeUrl, filename, destRel, progress: 0, state: 'queued', error: null });
+
+        // Kick off async work
+        (async () => {
+            const job = remoteDownloads.get(id);
+            try {
+                const destDir = safe(destRel);
+                await fs.mkdir(destDir, { recursive: true });
+                const tmpPath = path.join(TMP, `dl_${Date.now()}_${Math.random().toString(36).slice(2)}`);
+                const finalPath = path.join(destDir, filename);
+
+                job.state = 'downloading';
+                await new Promise((resolve, reject) => {
+                    const stream = got.stream(safeUrl, { timeout: { request: 600000 }, headers: { 'user-agent': 'Mozilla/5.0' } });
+                    stream.on('downloadProgress', p => {
+                        try {
+                            const pct = p?.total ? Math.round((p.transferred / p.total) * 100) : Math.min(99, Math.round((p?.percent || 0) * 100));
+                            job.progress = pct;
+                        } catch {}
+                    });
+                    const w = fss.createWriteStream(tmpPath);
+                    stream.on('error', reject).pipe(w).on('error', reject).on('finish', resolve);
+                });
+
+                job.state = 'moving';
+                await fs.rename(tmpPath, finalPath);
+
+                // Optional transcode
+                const ext = (path.extname(filename).slice(1) || '').toLowerCase();
+                const isVideo = ['mp4', 'mkv', 'mov', 'webm', 'avi', 'm4v', 'wmv', 'flv'].includes(ext);
+                if (transcode && isVideo) {
+                    const name = path.parse(filename).name;
+                    const outDir = path.join(HLS, name);
+                    await fs.mkdir(outDir, { recursive: true });
+                    const jobQ = await q.add('hls', { src: finalPath, outDir, name });
+                    job.transcodeJobId = jobQ.id;
+                    job.hls = `/hls/${encodeURIComponent(name)}/master.m3u8`;
+                }
+
+                job.progress = 100;
+                job.state = 'done';
+            } catch (e) {
+                const job = remoteDownloads.get(id) || { id };
+                job.state = 'error';
+                job.error = e?.message || 'Download failed';
+                remoteDownloads.set(id, job);
+            }
+        })();
+
+        res.json({ id, filename });
+    } catch (e) {
+        res.status(400).json({ error: e.message });
+    }
+});
+
+// Poll remote download status
+app.get('/remote/status/:id', auth, async (req, res) => {
+    const job = remoteDownloads.get(req.params.id);
+    if (!job) return res.status(404).json({ error: 'Not found' });
+    res.json({ id: job.id, filename: job.filename, progress: job.progress || 0, state: job.state, error: job.error || null, hls: job.hls, transcodeJobId: job.transcodeJobId });
+});
