@@ -148,7 +148,23 @@ app.post('/fs/mv', auth, async (req, res) => {
             });
         } else {
             // Move/rename operation
-            await fs.rename(sourcePath, destPath);
+            try {
+                await fs.rename(sourcePath, destPath);
+            } catch (renameError) {
+                console.log('fs.rename failed, trying mv command:', renameError.message);
+                // Fallback to mv command if fs.rename fails (e.g., cross-filesystem move)
+                const { exec } = require('child_process');
+                await new Promise((resolve, reject) => {
+                    exec(`mv "${sourcePath}" "${destPath}"`, (error, stdout, stderr) => {
+                        if (error) {
+                            console.error('mv command error:', error, stderr);
+                            reject(error);
+                        } else {
+                            resolve(stdout);
+                        }
+                    });
+                });
+            }
         }
         
         res.json({ ok: true });

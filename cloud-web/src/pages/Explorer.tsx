@@ -19,6 +19,10 @@ import NewFolderDialog from "@/features/fs/components/NewFolderDialog"
 import ConfirmDialog from "@/features/fs/components/ConfirmDialog"
 import InputDialog from "@/features/fs/components/InputDialog"
 import { useContextMenu, type ContextMenuItem } from "@/components/ContextMenu"
+import { useToast } from "@/components/Toast"
+import { ProgressDialog } from "@/components/ProgressDialog"
+import { FloatingPasteButton } from "@/components/FloatingPasteButton"
+import { ClipboardIndicator } from "@/components/ClipboardIndicator"
 
 type ClipMode = "copy" | "cut"
 type ClipboardState = { mode: ClipMode; items: string[]; sourceDir: string } | null
@@ -39,6 +43,7 @@ export default function Explorer() {
   const allPaths = useMemo(() => entries.map(e => e.path || joinPath(path, e.name)), [entries, path])
   const selectedCount = selected.size
   const { showContextMenu, ContextMenuComponent } = useContextMenu()
+  const { success, error: showError, info, ToastContainer } = useToast()
 
   function toggleSelect(p: string) {
     setSelected(prev => {
@@ -99,7 +104,7 @@ export default function Explorer() {
       if (entry.name.endsWith(".txt")) {
         nav(`/editor?path=${encodeURIComponent(p)}`)
       } else {
-        alert("Open file: " + entry.name)
+        info("File Preview", `Preview for "${entry.name}" not implemented yet`)
       }
     }
   }
@@ -113,9 +118,9 @@ export default function Explorer() {
     try {
       setBusy("Uploading…")
       await uploadMut.mutateAsync(f)
-      alert("Upload complete")
+      success("Upload Complete", `Successfully uploaded "${f.name}"`)
     } catch {
-      alert("Upload failed")
+      showError("Upload Failed", "Failed to upload the file. Please try again.")
     } finally {
       e.target.value = ""
       setBusy(null)
@@ -129,9 +134,9 @@ export default function Explorer() {
     try {
       setBusy("Requesting remote download…")
       await remoteMut.mutateAsync({ url, transcode: autoTranscode })
-      alert("Download started. Refreshing listing…")
+      success("Download Started", "Remote file download has been initiated")
     } catch {
-      alert("Remote download failed")
+      showError("Download Failed", "Remote download failed. Please check the URL and try again.")
     } finally {
       setBusy(null)
     }
@@ -143,14 +148,14 @@ export default function Explorer() {
     const items = Array.from(selected)
     console.log('Copy items to clipboard:', items)
     setClipboard({ mode: "copy", items, sourceDir: path })
-    alert(`Copied ${items.length} item(s) to clipboard`)
+    info("Copied to Clipboard", `${items.length} item(s) ready to paste`)
   }
   function onCut() {
     if (!selectedCount) return
     const items = Array.from(selected)
-    console.log('Cut items to clipboard:', items)
+    console.log('Move items to clipboard:', items)
     setClipboard({ mode: "cut", items, sourceDir: path })
-    alert(`Cut ${items.length} item(s) to clipboard`)
+    info("Ready to Move", `${items.length} item(s) prepared for moving`)
   }
   async function onPaste() {
     if (!clipboard) return
@@ -183,10 +188,10 @@ export default function Explorer() {
         qc.invalidateQueries({ queryKey: ["fs:list", clipboard.sourceDir] })
       }
       clearSelection()
-      alert(`${clipboard.mode === "cut" ? "Move" : "Copy"} operation completed successfully`)
+      success("Operation Complete", `${clipboard.mode === "cut" ? "Moved" : "Copied"} ${clipboard.items.length} item(s) successfully`)
     } catch (error) {
       console.error('Paste failed:', error)
-      alert((error as Error)?.message || "Paste failed")
+      showError("Operation Failed", (error as Error)?.message || "Paste failed")
     } finally {
       setBusy(null)
     }
@@ -211,10 +216,10 @@ export default function Explorer() {
       setShowRename(false)
       clearSelection()
       qc.invalidateQueries({ queryKey: ["fs:list", path] })
-      alert(`Successfully renamed "${oldName}" to "${newName}"`)
+      success("Renamed Successfully", `"${oldName}" renamed to "${newName}"`)
     } catch (error) {
       console.error('Rename failed:', error)
-      alert("Rename failed: " + (error as Error)?.message)
+      showError("Rename Failed", (error as Error)?.message || "Could not rename the item")
     } finally {
       setBusy(null)
     }
@@ -238,10 +243,10 @@ export default function Explorer() {
       clearSelection()
       qc.invalidateQueries({ queryKey: ["fs:list", path] })
       if (destDir !== path) qc.invalidateQueries({ queryKey: ["fs:list", destDir] })
-      alert(`Successfully moved ${selectedCount} item(s) to ${destDir}`)
+      success("Move Complete", `Successfully moved ${selectedCount} item(s) to ${destDir}`)
     } catch (error) {
       console.error('Move failed:', error)
-      alert("Move failed: " + (error as Error)?.message)
+      showError("Move Failed", (error as Error)?.message || "Could not move the selected items")
     } finally {
       setBusy(null)
     }
@@ -264,7 +269,7 @@ export default function Explorer() {
       })
       
       if (dangerousPaths.length > 0) {
-        alert(`Cannot delete parent directories: ${dangerousPaths.join(', ')}`)
+        showError("Delete Blocked", `Cannot delete parent directories: ${dangerousPaths.join(', ')}`)
         return
       }
       
@@ -283,7 +288,7 @@ export default function Explorer() {
       }
       
       if (validPaths.length === 0) {
-        alert('No valid paths to delete')
+        showError('Delete Failed', 'No valid paths to delete')
         return
       }
       
@@ -292,7 +297,7 @@ export default function Explorer() {
       setShowDelete(false)
     } catch (error) {
       console.error('Delete failed:', error)
-      alert("Delete failed: " + (error as Error)?.message)
+      showError("Delete Failed", (error as Error)?.message || "Could not delete the selected items")
     } finally {
       setBusy(null)
     }
@@ -303,9 +308,10 @@ export default function Explorer() {
     try {
       setBusy("Downloading…")
       await downloadFile(filePath)
+      success("Download Started", "File download has been initiated")
     } catch (error) {
       console.error('Download failed:', error)
-      alert("Download failed: " + (error as Error)?.message)
+      showError("Download Failed", (error as Error)?.message || "Could not download the file")
     } finally {
       setBusy(null)
     }
@@ -321,9 +327,19 @@ export default function Explorer() {
     if (isSelected && selectedCount > 1) {
       // Multi-selection context menu
       items.push(
-        { label: `Copy ${selectedCount} items`, icon: "📄", onClick: onCopy },
-        { label: `Cut ${selectedCount} items`, icon: "✂️", onClick: onCut },
-        { label: `Move ${selectedCount} items...`, icon: "📦", onClick: () => setShowMove(true) },
+        { label: `Copy ${selectedCount} items`, icon: "📄", onClick: () => {
+          const items = Array.from(selected)
+          console.log('Copy multiple items to clipboard:', items)
+          setClipboard({ mode: "copy", items, sourceDir: path })
+          info("Copied to Clipboard", `${items.length} items ready to paste`)
+        }},
+        { label: `Move ${selectedCount} items`, icon: "✂️", onClick: () => {
+          const items = Array.from(selected)
+          console.log('Move multiple items to clipboard:', items)
+          setClipboard({ mode: "cut", items, sourceDir: path })
+          info("Ready to Move", `${items.length} items prepared for moving`)
+        }},
+        { label: `Move ${selectedCount} items to...`, icon: "📦", onClick: () => setShowMove(true) },
         { label: `Delete ${selectedCount} items`, icon: "🗑️", onClick: () => setShowDelete(true) }
       )
     } else {
@@ -334,19 +350,23 @@ export default function Explorer() {
       
       items.push(
         { label: "Copy", icon: "📄", onClick: () => {
-          setSelected(new Set([entryPath]))
-          setTimeout(onCopy, 0)
+          // Direct copy without toast spam
+          console.log('Copy item to clipboard:', entryPath)
+          setClipboard({ mode: "copy", items: [entryPath], sourceDir: path })
+          info("Copied to Clipboard", "Item ready to paste")
         }},
-        { label: "Cut", icon: "✂️", onClick: () => {
-          setSelected(new Set([entryPath]))
-          setTimeout(onCut, 0)
+        { label: "Move", icon: "✂️", onClick: () => {
+          // Direct move without toast spam
+          console.log('Move item to clipboard:', entryPath)
+          setClipboard({ mode: "cut", items: [entryPath], sourceDir: path })
+          info("Ready to Move", "Item prepared for moving")
         }},
         { divider: true },
         { label: "Rename", icon: "✏️", onClick: () => {
           setSelected(new Set([entryPath]))
           setShowRename(true)
         }},
-        { label: "Move...", icon: "📦", onClick: () => {
+        { label: "Move to...", icon: "📦", onClick: () => {
           setSelected(new Set([entryPath]))
           setShowMove(true)
         }},
@@ -417,47 +437,66 @@ export default function Explorer() {
         {isLoading && <p>Loading…</p>}
         {error && <p className="text-red-600">Failed to list path.</p>}
 
-        <div 
-          className="divide-y rounded-lg border"
-          onContextMenu={(e) => showContextMenu(e, getEmptySpaceContextMenuItems())}
-        >
-          {entries.map((e) => {
-            const isDir = e.type === "dir" || e.isDir || e.isDirectory
-            // Fix path construction - ensure we use the proper full path
-            const p = e.path || joinPath(path, e.name)
-            console.log(`File: ${e.name}, Current Path: ${path}, Constructed Path: ${p}`)
-            const checked = selected.has(p)
-            return (
-              <div 
-                key={p} 
-                className="flex items-center gap-3 px-4 py-2 hover:bg-background-muted"
-                onContextMenu={(event) => {
-                  event.stopPropagation()
-                  showContextMenu(event, getContextMenuItems(e, p))
-                }}
-              >
-                <input
-                  type="checkbox"
-                  checked={checked}
-                  onChange={() => toggleSelect(p)}
-                  className="h-4 w-4"
-                  onClick={(ev)=>ev.stopPropagation()}
-                />
-                <button className="w-6" onClick={()=>toggleSelect(p)} title={checked ? "Unselect" : "Select"}>
-                  {isDir ? "📁" : "📄"}
-                </button>
-                <button className="flex-1 text-left" onClick={() => open(e)}>
-                  {e.name}
-                </button>
-                {!isDir && typeof e.size === "number" && (
-                  <span className="text-xs text-text-muted">{e.size} B</span>
-                )}
-              </div>
-            )
-          })}
-          {!isLoading && !error && entries.length === 0 && (
-            <div className="px-4 py-8 text-center text-text-muted">Empty folder</div>
-          )}
+        <div className="min-h-96 rounded-lg border">
+          {/* File List Area */}
+          <div 
+            className="min-h-full"
+            onContextMenu={(e) => {
+              // Only show empty space context menu if not clicking on a file row
+              const target = e.target as HTMLElement
+              if (!target.closest('.file-row')) {
+                showContextMenu(e, getEmptySpaceContextMenuItems())
+              }
+            }}
+          >
+            {entries.map((e) => {
+              const isDir = e.type === "dir" || e.isDir || e.isDirectory
+              const p = e.path || joinPath(path, e.name)
+              console.log(`File: ${e.name}, Current Path: ${path}, Constructed Path: ${p}`)
+              const checked = selected.has(p)
+              const inClipboard = clipboard?.items.includes(p)
+              const isCut = inClipboard && clipboard?.mode === "cut"
+              
+              return (
+                <div 
+                  key={p} 
+                  className={`file-row flex items-center gap-3 px-4 py-2 hover:bg-background-muted border-b border-gray-100 last:border-b-0 transition-all duration-200 ${
+                    isCut ? 'opacity-50 bg-yellow-50' : ''
+                  } ${
+                    inClipboard && clipboard?.mode === "copy" ? 'bg-blue-50' : ''
+                  }`}
+                  onContextMenu={(event) => {
+                    event.stopPropagation()
+                    showContextMenu(event, getContextMenuItems(e, p))
+                  }}
+                >
+                  <input
+                    type="checkbox"
+                    checked={checked}
+                    onChange={() => toggleSelect(p)}
+                    className="h-4 w-4"
+                    onClick={(ev)=>ev.stopPropagation()}
+                  />
+                  <button className="w-6" onClick={()=>toggleSelect(p)} title={checked ? "Unselect" : "Select"}>
+                    {isDir ? "📁" : "📄"}
+                  </button>
+                  <button className="flex-1 text-left" onClick={() => open(e)}>
+                    {e.name}
+                  </button>
+                  {!isDir && typeof e.size === "number" && (
+                    <span className="text-xs text-text-muted">{e.size} B</span>
+                  )}
+                </div>
+              )
+            })}
+            {!isLoading && !error && entries.length === 0 && (
+              <div className="px-4 py-8 text-center text-text-muted">Empty folder</div>
+            )}
+            {/* Empty Space for Right-Click */}
+            {entries.length > 0 && (
+              <div className="min-h-32" />
+            )}
+          </div>
         </div>
       </div>
 
@@ -529,6 +568,34 @@ export default function Explorer() {
 
       {/* Context Menu */}
       {ContextMenuComponent}
+      
+      {/* Toast Notifications */}
+      <ToastContainer />
+      
+      {/* Floating Paste Button */}
+      <FloatingPasteButton
+        visible={!!clipboard && clipboard.items.length > 0}
+        mode={clipboard?.mode || "copy"}
+        itemCount={clipboard?.items.length || 0}
+        onPaste={onPaste}
+        onCancel={() => {
+          setClipboard(null)
+          info("Cancelled", "Clipboard cleared")
+        }}
+      />
+      
+      {/* Clipboard Indicator */}
+      {clipboard && (
+        <ClipboardIndicator
+          mode={clipboard.mode}
+          items={clipboard.items}
+          sourceDir={clipboard.sourceDir}
+          onClear={() => {
+            setClipboard(null)
+            info("Clipboard Cleared", "All items removed from clipboard")
+          }}
+        />
+      )}
     </div>
   )
 }

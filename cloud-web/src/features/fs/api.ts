@@ -133,7 +133,15 @@ export async function removePaths(paths: string[]) {
 
 // Move/rename one item. Uses { src, dest } payload.
 export async function moveOne(src: string, dest: string, overwrite = true) {
-  await api.post("/fs/mv", { src, dest, overwrite })
+  console.log('moveOne API call:', { src, dest, overwrite, copy: false })
+  try {
+    const response = await api.post("/fs/mv", { src, dest, overwrite, copy: false })
+    console.log('moveOne success:', response)
+    return response
+  } catch (error) {
+    console.error('moveOne failed:', error)
+    throw error
+  }
 }
 
 // Copy one item. Preferred: mv with { copy: true }, fallback to /fs/cp if your backend exposes it.
