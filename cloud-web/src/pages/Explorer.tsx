@@ -44,6 +44,20 @@ export default function Explorer() {
   const selectedCount = selected.size
   const { showContextMenu, ContextMenuComponent } = useContextMenu()
   const { success, error: showError, info, StatusBar } = useStatusBar()
+  
+  // Breadcrumb segments for current path
+  const breadcrumbs = useMemo(() => {
+    const parts = path.split('/').filter(Boolean)
+    const segs: { label: string; full: string }[] = []
+    let cur = '/'
+    // Always start with root
+    segs.push({ label: 'Root', full: '/' })
+    for (const p of parts) {
+      cur = cur.endsWith('/') ? cur + p : cur + '/' + p
+      segs.push({ label: p, full: cur })
+    }
+    return segs
+  }, [path])
 
   function toggleSelect(p: string) {
     setSelected(prev => {
@@ -408,7 +422,6 @@ export default function Explorer() {
       <div className="mx-auto max-w-6xl px-4 py-6">
         <div className="mb-4 flex items-center justify-between">
           <h1 className="text-xl font-semibold text-brand">Explorer</h1>
-          <div className="text-sm text-text-muted">Path: <code>{path}</code></div>
         </div>
 
         {/* Simplified Toolbar */}
@@ -431,6 +444,24 @@ export default function Explorer() {
         {error && <p className="text-red-600">Failed to list path.</p>}
 
         <div className="min-h-96 rounded-lg border relative">
+          {/* Breadcrumbs */}
+          <div className="px-4 py-2 border-b bg-background-muted/40 rounded-t-lg">
+            <div className="flex items-center gap-2 text-sm">
+              <span className="text-base">📁</span>
+              {breadcrumbs.map((seg, i) => (
+                <span key={seg.full} className="flex items-center gap-2">
+                  {i > 0 && <span className="text-text-muted">/</span>}
+                  <button
+                    className={`hover:underline ${i === breadcrumbs.length - 1 ? 'font-medium text-text' : 'text-text-muted'}`}
+                    onClick={() => setParams({ path: seg.full })}
+                    title={seg.full}
+                  >
+                    {seg.label}
+                  </button>
+                </span>
+              ))}
+            </div>
+          </div>
           {/* File List Area */}
           <div 
             className="min-h-full"
