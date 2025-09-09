@@ -1,109 +1,3 @@
-// import { api } from "@/lib/axios"
-
-// export type FsEntry = {
-//   name: string
-//   path: string
-//   type: "file" | "dir"
-//   size?: number
-//   isDir?: boolean
-//   isDirectory?: boolean
-// }
-
-// function guessName(it: any): string {
-//   if (!it) return ""
-//   return (
-//     it.name ??
-//     it.filename ??
-//     it.base ??
-//     (typeof it.path === "string" ? it.path.split("/").filter(Boolean).pop() : undefined) ??
-//     ""
-//   )
-// }
-
-// function joinPath(base: string, name: string) {
-//   if (!base || base === "/") return `/${name}`.replace(/\/+/, "/")
-//   return `${base.replace(/\/+$/, "")}/${name}`.replace(/\/+/, "/")
-// }
-
-// function mapItem(it: any, basePath: string, forceType?: "file" | "dir"): FsEntry {
-//   const name = guessName(it)
-//   const type: "file" | "dir" =
-//     forceType ??
-//     (it.type === "dir" || it.isDir || it.isDirectory ? "dir" : it.type === "file" ? "file" : "file")
-
-//   return {
-//     name,
-//     path: it.path ?? joinPath(basePath, name),
-//     type,
-//     size: it.size ?? it.bytes ?? it.length,
-//     isDir: it.isDir,
-//     isDirectory: it.isDirectory,
-//   }
-// }
-
-// /**
-//  * Accepts many possible shapes and always returns FsEntry[]
-//  * Supported shapes:
-//  * - Array<item>
-//  * - { entries: Array }, { items: Array }, { list: Array }, { children: Array }, { result: Array }, { data: Array }
-//  * - { files: Array, dirs|directories|folders: Array }
-//  */
-// function normalizeFsResponse(raw: any, basePath: string): FsEntry[] {
-//   try {
-//     // Direct array
-//     if (Array.isArray(raw)) {
-//       return raw.map((it) => mapItem(it, basePath, (it?.type === "dir" || it?.isDir || it?.isDirectory) ? "dir" : undefined))
-//     }
-
-//     // Common container keys
-//     const arr =
-//       raw?.entries ??
-//       raw?.items ??
-//       raw?.list ??
-//       raw?.children ??
-//       raw?.result ??
-//       raw?.data
-
-//     if (Array.isArray(arr)) {
-//       return arr.map((it: any) =>
-//         mapItem(it, basePath, (it?.type === "dir" || it?.isDir || it?.isDirectory) ? "dir" : undefined)
-//       )
-//     }
-
-//     // Separate file/dir arrays
-//     const dirArr = raw?.dirs ?? raw?.directories ?? raw?.folders
-//     const fileArr = raw?.files ?? raw?.file
-
-//     const out: FsEntry[] = []
-//     if (Array.isArray(dirArr)) {
-//       out.push(...dirArr.map((it: any) => mapItem(it, basePath, "dir")))
-//     }
-//     if (Array.isArray(fileArr)) {
-//       out.push(...fileArr.map((it: any) => mapItem(it, basePath, "file")))
-//     }
-//     if (out.length) return out
-
-//     // Fallback: nothing usable
-//     return []
-//   } catch {
-//     return []
-//   }
-// }
-
-// export async function listFs(path: string): Promise<FsEntry[]> {
-//   const { data: raw } = await api.get("/fs/list", { params: { path } })
-//   const entries = normalizeFsResponse(raw, path)
-//   // Helpful during integration:
-//   if (import.meta.env.DEV && !Array.isArray(raw)) {
-//     // eslint-disable-next-line no-console
-//     console.debug("[fs:list] raw shape:", raw)
-//   }
-//   return entries
-// }
-
-
-
-
 import { api } from "@/lib/axios"
 
 export type FsEntry = {
@@ -113,6 +7,19 @@ export type FsEntry = {
   size?: number
   isDir?: boolean
   isDirectory?: boolean
+}
+
+/* ---------- path helpers ---------- */
+export function joinPath(base: string, name: string) {
+  if (!base || base === "/") return `/${name}`.replace(/\/+/, "/")
+  return `${base.replace(/\/+$/, "")}/${name}`.replace(/\/+/, "/")
+}
+export function parentOf(p: string) {
+  if (!p || p === "/") return "/"
+  const parts = p.replace(/\/+$/,"").split("/")
+  parts.pop()
+  const up = parts.join("/") || "/"
+  return up.endsWith("/") ? up : up + "/"
 }
 
 function guessName(it: any): string {
@@ -125,12 +32,6 @@ function guessName(it: any): string {
     ""
   )
 }
-
-function joinPath(base: string, name: string) {
-  if (!base || base === "/") return `/${name}`.replace(/\/+/, "/")
-  return `${base.replace(/\/+$/, "")}/${name}`.replace(/\/+/, "/")
-}
-
 function mapItem(it: any, basePath: string, forceType?: "file" | "dir"): FsEntry {
   const name = guessName(it)
   const type: "file" | "dir" =
@@ -146,54 +47,39 @@ function mapItem(it: any, basePath: string, forceType?: "file" | "dir"): FsEntry
     isDirectory: it.isDirectory,
   }
 }
-
 function normalizeFsResponse(raw: any, basePath: string): FsEntry[] {
   try {
     if (Array.isArray(raw)) return raw.map((it) => mapItem(it, basePath, (it?.type === "dir" || it?.isDir || it?.isDirectory) ? "dir" : undefined))
-
     const arr =
-      raw?.entries ??
-      raw?.items ??
-      raw?.list ??
-      raw?.children ??
-      raw?.result ??
-      raw?.data
-
+      raw?.entries ?? raw?.items ?? raw?.list ?? raw?.children ?? raw?.result ?? raw?.data
     if (Array.isArray(arr)) {
       return arr.map((it: any) =>
         mapItem(it, basePath, (it?.type === "dir" || it?.isDir || it?.isDirectory) ? "dir" : undefined)
       )
     }
-
     const dirArr = raw?.dirs ?? raw?.directories ?? raw?.folders
     const fileArr = raw?.files ?? raw?.file
-
     const out: FsEntry[] = []
     if (Array.isArray(dirArr)) out.push(...dirArr.map((it: any) => mapItem(it, basePath, "dir")))
     if (Array.isArray(fileArr)) out.push(...fileArr.map((it: any) => mapItem(it, basePath, "file")))
     if (out.length) return out
-
     return []
   } catch {
     return []
   }
 }
 
+/* ---------- existing calls ---------- */
 export async function listFs(path: string): Promise<FsEntry[]> {
   const { data: raw } = await api.get("/fs/list", { params: { path } })
   const entries = normalizeFsResponse(raw, path)
   if (import.meta.env.DEV && !Array.isArray(raw)) console.debug("[fs:list] raw shape:", raw)
   return entries
 }
-
-/** Create folder under current path */
 export async function mkdirAt(currentPath: string, name: string) {
   const full = joinPath(currentPath, name)
-  // Your backend: POST /api/fs/mkdir with { path } (adjust if it expects { dest } + name)
   await api.post("/fs/mkdir", { path: full })
 }
-
-/** Upload a single file to current path (multipart dest + file) */
 export async function uploadFile(destPath: string, file: File, onProgress?: (pct: number) => void) {
   const form = new FormData()
   form.append("dest", destPath)
@@ -207,9 +93,80 @@ export async function uploadFile(destPath: string, file: File, onProgress?: (pct
     },
   })
 }
-
-/** Remote download into current path (optionally transcode) */
 export async function remoteDownload(url: string, destPath: string, transcode?: boolean) {
   const { data } = await api.post("/remote/download", { url, dest: destPath, transcode: !!transcode })
-  return data // backend returns { jobId?, ... }—we’ll just refresh listing for now
+  return data
+}
+
+/* ---------- new: delete / move / copy / rename ---------- */
+
+// Tries { paths: string[] } first; if the backend only accepts single { path }, falls back per-item.
+export async function removePaths(paths: string[]) {
+  if (paths.length === 0) return
+  try {
+    await api.post("/fs/rm", { paths })
+  } catch {
+    // fallback: send individually
+    await Promise.all(paths.map((p) => api.post("/fs/rm", { path: p })))
+  }
+}
+
+// Move/rename one item. Uses { src, dest } payload.
+export async function moveOne(src: string, dest: string, overwrite = true) {
+  await api.post("/fs/mv", { src, dest, overwrite })
+}
+
+// Copy one item. Preferred: mv with { copy: true }, fallback to /fs/cp if your backend exposes it.
+export async function copyOne(src: string, dest: string, overwrite = true) {
+  try {
+    await api.post("/fs/mv", { src, dest, overwrite, copy: true })
+  } catch (e) {
+    try {
+      await api.post("/fs/cp", { src, dest, overwrite })
+    } catch {
+      throw new Error("Copy not supported by backend (/fs/mv copy:true or /fs/cp missing).")
+    }
+  }
+}
+
+export async function renameOne(currentDir: string, oldName: string, newName: string) {
+  const from = joinPath(currentDir, oldName)
+  const to = joinPath(currentDir, newName)
+  await moveOne(from, to, true)
+}
+
+export function downloadFile(path: string, filename?: string) {
+  const url = `${api.defaults.baseURL}/fs/download?path=${encodeURIComponent(path)}`
+  const link = document.createElement('a')
+  link.href = url
+  link.download = filename || path.split('/').pop() || 'download'
+  
+  // Add authorization header by creating a temporary form
+  const token = localStorage.getItem('auth_token')
+  if (token) {
+    // For file downloads, we need to include auth in URL or use a different approach
+    // Since we can't add headers to a direct download link, we'll fetch and create blob
+    return fetch(url, {
+      headers: {
+        'Authorization': `Bearer ${token}`
+      }
+    })
+    .then(response => {
+      if (!response.ok) throw new Error('Download failed')
+      return response.blob()
+    })
+    .then(blob => {
+      const blobUrl = window.URL.createObjectURL(blob)
+      link.href = blobUrl
+      document.body.appendChild(link)
+      link.click()
+      document.body.removeChild(link)
+      window.URL.revokeObjectURL(blobUrl)
+    })
+  } else {
+    // Fallback without auth (shouldn't happen in protected routes)
+    document.body.appendChild(link)
+    link.click()
+    document.body.removeChild(link)
+  }
 }

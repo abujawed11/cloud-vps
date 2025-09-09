@@ -1,8 +1,27 @@
 import { useSearchParams, useNavigate } from "react-router-dom"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
-import { listFs, type FsEntry, mkdirAt, uploadFile, remoteDownload } from "@/features/fs/api"
-import { useRef, useState } from "react"
+import {
+  listFs,
+  type FsEntry,
+  mkdirAt,
+  uploadFile,
+  remoteDownload,
+  removePaths,
+  moveOne,
+  copyOne,
+  renameOne,
+  joinPath,
+  parentOf,
+  downloadFile
+} from "@/features/fs/api"
+import { useMemo, useRef, useState } from "react"
 import NewFolderDialog from "@/features/fs/components/NewFolderDialog"
+import ConfirmDialog from "@/features/fs/components/ConfirmDialog"
+import InputDialog from "@/features/fs/components/InputDialog"
+import { useContextMenu, type ContextMenuItem } from "@/components/ContextMenu"
+
+type ClipMode = "copy" | "cut"
+type ClipboardState = { mode: ClipMode; items: string[]; sourceDir: string } | null
 
 export default function Explorer() {
   const [params, setParams] = useSearchParams()
@@ -15,19 +34,40 @@ export default function Explorer() {
     queryFn: () => listFs(path),
   })
 
-  // --- Toolbar state
+  /* ---------- selection ---------- */
+  const [selected, setSelected] = useState<Set<string>>(new Set())
+  const allPaths = useMemo(() => entries.map(e => e.path || joinPath(path, e.name)), [entries, path])
+  const selectedCount = selected.size
+  const { showContextMenu, hideContextMenu, ContextMenuComponent } = useContextMenu()
+
+  function toggleSelect(p: string) {
+    setSelected(prev => {
+      const n = new Set(prev)
+      if (n.has(p)) n.delete(p); else n.add(p)
+      return n
+    })
+  }
+  function clearSelection() { setSelected(new Set()) }
+  function selectAll() { setSelected(new Set(allPaths)) }
+
+  /* ---------- dialogs / busy states ---------- */
   const fileInputRef = useRef<HTMLInputElement | null>(null)
   const [uploadPct, setUploadPct] = useState<number | null>(null)
   const [busy, setBusy] = useState<string | null>(null)
 
-  // Dialog
   const [showNewFolder, setShowNewFolder] = useState(false)
+  const [showDelete, setShowDelete] = useState(false)
+  const [showRename, setShowRename] = useState(false)
+  const [showMove, setShowMove] = useState(false)
 
+  /* ---------- clipboard ---------- */
+  const [clipboard, setClipboard] = useState<ClipboardState>(null)
+
+  /* ---------- mutations ---------- */
   const mkdirMut = useMutation({
     mutationFn: (name: string) => mkdirAt(path, name),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["fs:list", path] }),
   })
-
   const uploadMut = useMutation({
     mutationFn: (file: File) => uploadFile(path, file, (p) => setUploadPct(p)),
     onSuccess: () => {
@@ -36,13 +76,19 @@ export default function Explorer() {
     },
     onError: () => setUploadPct(null),
   })
-
   const remoteMut = useMutation({
-    mutationFn: (args: { url: string; transcode?: boolean }) =>
-      remoteDownload(args.url, path, args.transcode),
+    mutationFn: (args: { url: string; transcode?: boolean }) => remoteDownload(args.url, path, args.transcode),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["fs:list", path] }),
   })
+  const deleteMut = useMutation({
+    mutationFn: (paths: string[]) => removePaths(paths),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["fs:list", path] })
+      clearSelection()
+    },
+  })
 
+  /* ---------- row/open ---------- */
   function open(entry: FsEntry) {
     const isDir = entry.type === "dir" || entry.isDir || entry.isDirectory
     if (isDir) {
@@ -57,18 +103,10 @@ export default function Explorer() {
       }
     }
   }
+  function goUp() { setParams({ path: parentOf(path) }) }
 
-  function parentPath(p: string) {
-    if (p === "/" || p === "") return "/"
-    const parts = p.replace(/\/+$/,"").split("/")
-    parts.pop()
-    const up = parts.join("/") || "/"
-    return up.endsWith("/") ? up : up + "/"
-  }
-
-  function onUploadClick() {
-    fileInputRef.current?.click()
-  }
+  /* ---------- toolbar handlers ---------- */
+  function onUploadClick() { fileInputRef.current?.click() }
   async function onFileSelected(e: React.ChangeEvent<HTMLInputElement>) {
     const f = e.target.files?.[0]
     if (!f) return
@@ -76,7 +114,7 @@ export default function Explorer() {
       setBusy("Uploading…")
       await uploadMut.mutateAsync(f)
       alert("Upload complete")
-    } catch (err) {
+    } catch {
       alert("Upload failed")
     } finally {
       e.target.value = ""
@@ -84,7 +122,6 @@ export default function Explorer() {
       setUploadPct(null)
     }
   }
-
   async function onPasteLink() {
     const url = window.prompt("Paste a direct link to file/video:")
     if (!url) return
@@ -100,6 +137,187 @@ export default function Explorer() {
     }
   }
 
+  /* ---------- cut/copy/paste ---------- */
+  function onCopy() {
+    if (!selectedCount) return
+    setClipboard({ mode: "copy", items: Array.from(selected), sourceDir: path })
+  }
+  function onCut() {
+    if (!selectedCount) return
+    setClipboard({ mode: "cut", items: Array.from(selected), sourceDir: path })
+  }
+  async function onPaste() {
+    if (!clipboard) return
+    setBusy(clipboard.mode === "cut" ? "Moving…" : "Copying…")
+    try {
+      // If pasting into the same folder & mode is cut, it's a no-op (unless rename), but we still try move to refresh location.
+      for (const src of clipboard.items) {
+        const name = src.split("/").filter(Boolean).pop()!
+        const dest = joinPath(path, name)
+        if (clipboard.mode === "cut") {
+          await moveOne(src, dest, true)
+        } else {
+          await copyOne(src, dest, true)
+        }
+      }
+      setClipboard(null)
+      qc.invalidateQueries({ queryKey: ["fs:list", path] })
+      if (clipboard.sourceDir !== path) {
+        qc.invalidateQueries({ queryKey: ["fs:list", clipboard.sourceDir] })
+      }
+      clearSelection()
+    } catch (e: any) {
+      alert(e?.message || "Paste failed")
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  /* ---------- rename / move / delete ---------- */
+  async function doRename(newName: string) {
+    if (selectedCount !== 1) return
+    const only = Array.from(selected)[0]
+    const curDir = parentOf(only)
+    const oldName = only.split("/").filter(Boolean).pop()!
+    setBusy("Renaming…")
+    try {
+      await renameOne(curDir, oldName, newName)
+      setShowRename(false)
+      clearSelection()
+      qc.invalidateQueries({ queryKey: ["fs:list", path] })
+    } catch {
+      alert("Rename failed")
+    } finally {
+      setBusy(null)
+    }
+  }
+  async function doMove(destDir: string) {
+    if (!selectedCount) return
+    setBusy("Moving…")
+    try {
+      for (const src of Array.from(selected)) {
+        const name = src.split("/").filter(Boolean).pop()!
+        const dest = joinPath(destDir, name)
+        await moveOne(src, dest, true)
+      }
+      setShowMove(false)
+      clearSelection()
+      qc.invalidateQueries({ queryKey: ["fs:list", path] })
+      if (destDir !== path) qc.invalidateQueries({ queryKey: ["fs:list", destDir] })
+    } catch {
+      alert("Move failed")
+    } finally {
+      setBusy(null)
+    }
+  }
+  async function doDelete() {
+    if (!selectedCount) return
+    setBusy("Deleting…")
+    try {
+      const pathsToDelete = Array.from(selected)
+      console.log('Deleting paths:', pathsToDelete)
+      await deleteMut.mutateAsync(pathsToDelete)
+      setShowDelete(false)
+    } catch (e) {
+      console.error('Delete failed:', e)
+      alert("Delete failed: " + (e as Error)?.message)
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  /* ---------- download ---------- */
+  async function doDownload(filePath: string) {
+    try {
+      setBusy("Downloading…")
+      await downloadFile(filePath)
+    } catch (e) {
+      console.error('Download failed:', e)
+      alert("Download failed: " + (e as Error)?.message)
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  /* ---------- context menu ---------- */
+  function getContextMenuItems(entry: FsEntry, entryPath: string): ContextMenuItem[] {
+    const isDir = entry.type === "dir" || entry.isDir || entry.isDirectory
+    const isSelected = selected.has(entryPath)
+    
+    const items: ContextMenuItem[] = []
+
+    if (isSelected && selectedCount > 1) {
+      // Multi-selection context menu
+      items.push(
+        { label: `Copy ${selectedCount} items`, icon: "📄", onClick: onCopy },
+        { label: `Cut ${selectedCount} items`, icon: "✂️", onClick: onCut },
+        { label: `Move ${selectedCount} items...`, icon: "📦", onClick: () => setShowMove(true) },
+        { label: `Delete ${selectedCount} items`, icon: "🗑️", onClick: () => setShowDelete(true) }
+      )
+    } else {
+      // Single item context menu
+      if (!isDir) {
+        items.push({ label: "Download", icon: "⬇️", onClick: () => doDownload(entryPath) })
+      }
+      
+      items.push(
+        { label: "Copy", icon: "📄", onClick: () => {
+          setSelected(new Set([entryPath]))
+          setTimeout(onCopy, 0)
+        }},
+        { label: "Cut", icon: "✂️", onClick: () => {
+          setSelected(new Set([entryPath]))
+          setTimeout(onCut, 0)
+        }},
+        { divider: true },
+        { label: "Rename", icon: "✏️", onClick: () => {
+          setSelected(new Set([entryPath]))
+          setShowRename(true)
+        }},
+        { label: "Move...", icon: "📦", onClick: () => {
+          setSelected(new Set([entryPath]))
+          setShowMove(true)
+        }},
+        { divider: true },
+        { label: "Delete", icon: "🗑️", onClick: () => {
+          setSelected(new Set([entryPath]))
+          setShowDelete(true)
+        }}
+      )
+    }
+
+    return items
+  }
+
+  function getEmptySpaceContextMenuItems(): ContextMenuItem[] {
+    const items: ContextMenuItem[] = [
+      { label: "New Folder", icon: "➕", onClick: () => setShowNewFolder(true) },
+      { label: "Upload File", icon: "⤴️", onClick: onUploadClick },
+      { label: "Paste Link", icon: "🔗", onClick: onPasteLink }
+    ]
+
+    if (clipboard && clipboard.items.length > 0) {
+      items.push(
+        { divider: true },
+        { label: `Paste ${clipboard.items.length} item(s)`, icon: "📋", onClick: onPaste }
+      )
+    }
+
+    if (selectedCount > 0) {
+      items.push(
+        { divider: true },
+        { label: "Clear Selection", icon: "❌", onClick: clearSelection }
+      )
+    }
+
+    items.push(
+      { divider: true },
+      { label: "Select All", icon: "☑️", onClick: selectAll }
+    )
+
+    return items
+  }
+
   return (
     <div className="min-h-screen bg-background text-text">
       <div className="mx-auto max-w-6xl px-4 py-6">
@@ -108,90 +326,135 @@ export default function Explorer() {
           <div className="text-sm text-text-muted">Path: <code>{path}</code></div>
         </div>
 
-        {/* Toolbar */}
-        <div className="mb-3 flex items-center gap-2">
-          <button
-            className="rounded-md border px-3 py-1.5 hover:bg-background-muted"
-            onClick={() => setParams({ path: parentPath(path) })}
-          >
-            ⬆️ Up
-          </button>
+        {/* Simplified Toolbar */}
+        <div className="mb-3 flex flex-wrap items-center gap-2">
+          <button className="rounded-md border px-3 py-1.5 hover:bg-background-muted" onClick={goUp}>⬆️ Up</button>
+          <button className="rounded-md bg-brand px-3 py-1.5 text-white hover:bg-brand-dark" onClick={()=>setShowNewFolder(true)}>➕ New Folder</button>
+          <button className="rounded-md border px-3 py-1.5 hover:bg-background-muted" onClick={onUploadClick}>⤴️ Upload</button>
+          <input ref={fileInputRef} type="file" className="hidden" onChange={onFileSelected} />
+          <button className="rounded-md border px-3 py-1.5 hover:bg-background-muted" onClick={onPasteLink}>🔗 Paste Link</button>
 
-          <button
-            className="rounded-md bg-brand px-3 py-1.5 text-white hover:bg-brand-dark"
-            onClick={() => setShowNewFolder(true)}
-          >
-            ➕ New Folder
-          </button>
-
-          <button
-            className="rounded-md border px-3 py-1.5 hover:bg-background-muted"
-            onClick={onUploadClick}
-          >
-            ⬆️ Upload
-          </button>
-          <input
-            ref={fileInputRef}
-            type="file"
-            className="hidden"
-            onChange={onFileSelected}
-          />
-
-          <button
-            className="rounded-md border px-3 py-1.5 hover:bg-background-muted"
-            onClick={onPasteLink}
-          >
-            🔗 Paste Link
-          </button>
-
-          {busy && (
-            <span className="ml-3 text-sm text-text-muted">{busy}</span>
-          )}
-          {uploadPct !== null && (
-            <span className="text-sm text-text-muted"> {uploadPct}% </span>
-          )}
+          <div className="ml-auto flex items-center gap-4 text-sm text-text-muted">
+            {busy && <span>{busy}</span>}
+            {uploadPct !== null && <span>{uploadPct}%</span>}
+            {clipboard && <span>Clipboard: {clipboard.mode} {clipboard.items.length} item(s)</span>}
+            {selectedCount > 0 && <span>Selected: {selectedCount}</span>}
+          </div>
         </div>
 
         {isLoading && <p>Loading…</p>}
         {error && <p className="text-red-600">Failed to list path.</p>}
 
-        <ul className="divide-y rounded-lg border">
+        <div 
+          className="divide-y rounded-lg border"
+          onContextMenu={(e) => showContextMenu(e, getEmptySpaceContextMenuItems())}
+        >
           {entries.map((e) => {
             const isDir = e.type === "dir" || e.isDir || e.isDirectory
+            const p = e.path || joinPath(path, e.name)
+            const checked = selected.has(p)
             return (
-              <li
-                key={(e.path || "") + e.name}
-                className="flex items-center gap-3 px-4 py-2 hover:bg-background-muted cursor-pointer"
-                onClick={() => open(e)}
+              <div 
+                key={p} 
+                className="flex items-center gap-3 px-4 py-2 hover:bg-background-muted"
+                onContextMenu={(event) => {
+                  event.stopPropagation()
+                  showContextMenu(event, getContextMenuItems(e, p))
+                }}
               >
-                <span className="w-6">{isDir ? "📁" : "📄"}</span>
-                <span className="flex-1">{e.name}</span>
+                <input
+                  type="checkbox"
+                  checked={checked}
+                  onChange={() => toggleSelect(p)}
+                  className="h-4 w-4"
+                  onClick={(ev)=>ev.stopPropagation()}
+                />
+                <button className="w-6" onClick={()=>toggleSelect(p)} title={checked ? "Unselect" : "Select"}>
+                  {isDir ? "📁" : "📄"}
+                </button>
+                <button className="flex-1 text-left" onClick={() => open(e)}>
+                  {e.name}
+                </button>
                 {!isDir && typeof e.size === "number" && (
                   <span className="text-xs text-text-muted">{e.size} B</span>
                 )}
-              </li>
+              </div>
             )
           })}
           {!isLoading && !error && entries.length === 0 && (
-            <li className="px-4 py-8 text-center text-text-muted">Empty folder</li>
+            <div className="px-4 py-8 text-center text-text-muted">Empty folder</div>
           )}
-        </ul>
+        </div>
       </div>
 
-      {/* Dialog */}
+      {/* New Folder */}
       <NewFolderDialog
         open={showNewFolder}
         onClose={() => setShowNewFolder(false)}
         isCreating={mkdirMut.isPending}
         onCreate={async (name) => {
-          try {
-            await mkdirMut.mutateAsync(name)
-            setShowNewFolder(false)
-          } catch {
-            alert("Failed to create folder")
-          }
+          await mkdirMut.mutateAsync(name)
+          setShowNewFolder(false)
         }}
       />
+
+      {/* Delete */}
+      <ConfirmDialog
+        open={showDelete}
+        // onClose={()=>setShowDelete(false)}
+        onCancel={()=>setShowDelete(false)}
+        onConfirm={doDelete}
+        busy={deleteMut.isPending}
+        title="Delete selected?"
+        message={
+          <div>
+            This will permanently delete:
+            <ul className="mt-2 max-h-40 overflow-auto text-xs">
+              {Array.from(selected).map(p=>(<li key={p}><code>{p}</code></li>))}
+            </ul>
+          </div>
+        }
+        confirmText="Delete"
+      />
+
+      {/* Rename (single) */}
+      <InputDialog
+        open={showRename}
+        onClose={()=>setShowRename(false)}
+        title="Rename"
+        label="New name"
+        defaultValue={selectedCount===1 ? Array.from(selected)[0].split("/").filter(Boolean).pop() : ""}
+        submitText="Rename"
+        validate={(v)=>{
+          if (!v.trim()) return "Name is required"
+          if (/[\\/:*?"<>|]/.test(v)) return "Invalid characters: \\ / : * ? \" < > |"
+          if (v.includes("..")) return "Name cannot contain .."
+          return null
+        }}
+        onSubmit={doRename}
+        busy={!!busy}
+      />
+
+      {/* Move (multiple) */}
+      <InputDialog
+        open={showMove}
+        onClose={()=>setShowMove(false)}
+        title="Move to…"
+        label="Destination folder"
+        defaultValue={path}
+        placeholder="/srv/storage/library/"
+        submitText="Move"
+        validate={(v)=>{
+          if (!v.trim()) return "Destination is required"
+          if (!v.startsWith("/")) return "Use an absolute path starting with /"
+          return null
+        }}
+        onSubmit={doMove}
+        busy={!!busy}
+      />
+
+      {/* Context Menu */}
+      {ContextMenuComponent}
     </div>
   )
 }
