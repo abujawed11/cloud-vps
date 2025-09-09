@@ -98,6 +98,16 @@ export async function remoteDownload(url: string, destPath: string, transcode?: 
   return data
 }
 
+export async function startRemoteDownload(url: string, destPath: string, transcode?: boolean): Promise<{ id: string; filename: string }> {
+  const { data } = await api.post("/remote/start", { url, dest: destPath, transcode: !!transcode })
+  return data
+}
+
+export async function getRemoteStatus(id: string): Promise<{ id: string; filename: string; progress: number; state: string; error?: string | null }>{
+  const { data } = await api.get(`/remote/status/${encodeURIComponent(id)}`)
+  return data
+}
+
 /* ---------- new: delete / move / copy / rename ---------- */
 
 // Tries { paths: string[] } first; if the backend only accepts single { path }, falls back per-item.

@@ -1,11 +1,13 @@
 import { useSearchParams, useNavigate } from "react-router-dom"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
-import {
+import { 
   listFs,
   type FsEntry,
   mkdirAt,
   uploadFile,
   remoteDownload,
+  startRemoteDownload,
+  getRemoteStatus,
   removePaths,
   moveOne,
   copyOne,
@@ -14,10 +16,11 @@ import {
   parentOf,
   downloadFile
 } from "@/features/fs/api"
-import { useMemo, useRef, useState } from "react"
+import { useMemo, useRef, useState, useEffect } from "react"
 import NewFolderDialog from "@/features/fs/components/NewFolderDialog"
 import ConfirmDialog from "@/features/fs/components/ConfirmDialog"
 import InputDialog from "@/features/fs/components/InputDialog"
+import PasteLinkDialog from "@/features/fs/components/PasteLinkDialog"
 import { useContextMenu, type ContextMenuItem } from "@/components/ContextMenu"
 import { useStatusBar } from "@/components/StatusBar"
 // import { ProgressDialog } from "@/components/ProgressDialog"
@@ -78,6 +81,10 @@ export default function Explorer() {
   const [showDelete, setShowDelete] = useState(false)
   const [showRename, setShowRename] = useState(false)
   const [showMove, setShowMove] = useState(false)
+  const [showPasteLink, setShowPasteLink] = useState(false)
+  
+  type RemoteJob = { id: string; filename: string; progress: number; state: string; error?: string | null }
+  const [remoteJobs, setRemoteJobs] = useState<RemoteJob[]>([])
 
   /* ---------- clipboard ---------- */
   const [clipboard, setClipboard] = useState<ClipboardState>(null)
@@ -142,19 +149,40 @@ export default function Explorer() {
     }
   }
   async function onPasteLink() {
-    const url = window.prompt("Paste a direct link to file/video:")
-    if (!url) return
-    const autoTranscode = window.confirm("Auto-transcode if video?")
+    setShowPasteLink(true)
+  }
+
+  async function submitPasteLink(args: { url: string; transcode?: boolean }) {
     try {
-      setBusy("Requesting remote download…")
-      await remoteMut.mutateAsync({ url, transcode: autoTranscode })
-      success("Download Started: Remote file download has been initiated")
+      setBusy("Starting download…")
+      const { id, filename } = await startRemoteDownload(args.url, path, args.transcode)
+      setShowPasteLink(false)
+      setRemoteJobs((jobs) => [...jobs, { id, filename, progress: 0, state: 'queued' }])
+      info(`Download Started: ${filename}`)
     } catch {
-      showError("Download Failed: Remote download failed. Please check the URL and try again.")
+      showError("Download Failed: Could not start remote download. Please check the URL and try again.")
     } finally {
       setBusy(null)
     }
   }
+
+  // Poll remote download progress
+  useEffect(() => {
+    if (remoteJobs.length === 0) return
+    const timer = setInterval(async () => {
+      try {
+        const updates = await Promise.all(remoteJobs.map(j => getRemoteStatus(j.id).catch(() => null)))
+        setRemoteJobs(prev => prev.map((j, idx) => {
+          const u = updates[idx]
+          if (!u) return j
+          return { id: u.id, filename: u.filename || j.filename, progress: u.progress ?? j.progress, state: u.state || j.state, error: u.error }
+        }))
+      } catch {
+        // ignore
+      }
+    }, 1000)
+    return () => clearInterval(timer)
+  }, [remoteJobs.length])
 
   /* ---------- cut/copy/paste ---------- */
   // These functions are no longer used as we handle clipboard operations directly in context menu
@@ -462,6 +490,29 @@ export default function Explorer() {
               ))}
             </div>
           </div>
+          {/* Remote download progress */}
+          {remoteJobs.length > 0 && (
+            <div className="px-4 py-2 border-b bg-white/50">
+              {remoteJobs.map(job => (
+                <div key={job.id} className="mb-2 last:mb-0">
+                  <div className="flex items-center justify-between text-xs mb-1">
+                    <span className="truncate max-w-[70%]">Downloading to cloud: {job.filename}</span>
+                    <span className="text-text-muted">{job.progress}%</span>
+                  </div>
+                  <div className="h-2 w-full rounded bg-gray-200 overflow-hidden">
+                    <div className="h-full bg-blue-600 transition-all" style={{ width: `${Math.min(100, Math.max(0, job.progress))}%` }} />
+                  </div>
+                  <div className="mt-1 flex items-center justify-between text-[11px] text-text-muted">
+                    <span>Status: {job.state}</span>
+                    {(job.state === 'done' || job.state === 'error') && (
+                      <button className="underline" onClick={() => setRemoteJobs(list => list.filter(j => j.id !== job.id))}>Dismiss</button>
+                    )}
+                  </div>
+                  {job.error && <div className="text-[11px] text-red-600 mt-1">{job.error}</div>}
+                </div>
+              ))}
+            </div>
+          )}
           {/* File List Area */}
           <div 
             className="min-h-full"
@@ -564,6 +615,14 @@ export default function Explorer() {
           </div>
         }
         confirmText="Delete"
+      />
+
+      {/* Paste Link */}
+      <PasteLinkDialog
+        open={showPasteLink}
+        onClose={() => setShowPasteLink(false)}
+        onSubmit={submitPasteLink}
+        busy={!!busy}
       />
 
       {/* Rename (single) */}
