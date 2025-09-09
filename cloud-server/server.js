@@ -62,19 +62,19 @@ const upload = multer({ dest: TMP });
 
 
 const isPrivateIp = (ip) => {
-  try {
-    const a = ipaddr.parse(ip);
-    return a.range() !== 'unicast'; // private/loopback/link-local/etc.
-  } catch { return true; }
+    try {
+        const a = ipaddr.parse(ip);
+        return a.range() !== 'unicast'; // private/loopback/link-local/etc.
+    } catch { return true; }
 };
 
 async function assertSafeHttpUrl(raw) {
-  let u;
-  try { u = new URL(raw); } catch { throw new Error('Invalid URL'); }
-  if (!/^https?:$/.test(u.protocol)) throw new Error('Only http/https allowed');
-  const { address } = await dns.lookup(u.hostname);
-  if (isPrivateIp(address)) throw new Error('Blocked internal address');
-  return u.toString();
+    let u;
+    try { u = new URL(raw); } catch { throw new Error('Invalid URL'); }
+    if (!/^https?:$/.test(u.protocol)) throw new Error('Only http/https allowed');
+    const { address } = await dns.lookup(u.hostname);
+    if (isPrivateIp(address)) throw new Error('Blocked internal address');
+    return u.toString();
 }
 
 // --------- List ----------
@@ -248,7 +248,10 @@ new Worker('transcode', async (job) => {
         '#EXT-X-STREAM-INF:BANDWIDTH=1800000,RESOLUTION=854x480', '480p.m3u8',
     ].join('\n');
     await fs.writeFile(path.join(outDir, 'master.m3u8'), master);
-}, { connection: { url: REDIS_URL } });
+}, {
+    connection: { url: REDIS_URL },
+    concurrency: 1
+});
 
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => console.log('API listening on :' + PORT));
@@ -258,81 +261,81 @@ app.listen(PORT, () => console.log('API listening on :' + PORT));
 //Remote download endpoint
 
 app.post('/remote/download', auth, async (req, res) => {
-  try {
-    const rawUrl = (req.body?.url || '').trim();
-    const destRel = norm(req.body?.dest || '/');       // e.g. "/seedr"
-    const transcode = !!req.body?.transcode;           // optional
-
-    const safeUrl = await assertSafeHttpUrl(rawUrl);
-
-    // Try HEAD for filename; if blocked, GET once
-    let head;
     try {
-      head = await got.head(safeUrl, {
-        timeout: { request: 15000 },
-        headers: { 'user-agent': 'Mozilla/5.0' }
-      });
-    } catch {
-      head = await got(safeUrl, {
-        method: 'GET',
-        throwHttpErrors: false,
-        timeout: { request: 15000 },
-        headers: { 'user-agent': 'Mozilla/5.0' }
-      });
+        const rawUrl = (req.body?.url || '').trim();
+        const destRel = norm(req.body?.dest || '/');       // e.g. "/seedr"
+        const transcode = !!req.body?.transcode;           // optional
+
+        const safeUrl = await assertSafeHttpUrl(rawUrl);
+
+        // Try HEAD for filename; if blocked, GET once
+        let head;
+        try {
+            head = await got.head(safeUrl, {
+                timeout: { request: 15000 },
+                headers: { 'user-agent': 'Mozilla/5.0' }
+            });
+        } catch {
+            head = await got(safeUrl, {
+                method: 'GET',
+                throwHttpErrors: false,
+                timeout: { request: 15000 },
+                headers: { 'user-agent': 'Mozilla/5.0' }
+            });
+        }
+
+        // Derive filename
+        let filename = null;
+        const cd = head.headers['content-disposition'];
+        if (cd) {
+            try {
+                const parsed = contentDisposition.parse(cd);
+                filename = parsed.parameters['filename*'] || parsed.parameters.filename || null;
+            } catch { }
+        }
+        if (!filename) {
+            const u = new URL(safeUrl);
+            const last = decodeURIComponent((u.pathname.split('/').pop() || '').trim());
+            filename = last || 'download.bin';
+        }
+
+        // Paths
+        const destDir = safe(destRel);
+        await fs.mkdir(destDir, { recursive: true });
+        const tmpPath = path.join(TMP, `dl_${Date.now()}_${Math.random().toString(36).slice(2)}`);
+        const finalPath = path.join(destDir, filename);
+
+        // Stream download
+        await new Promise((resolve, reject) => {
+            const w = fss.createWriteStream(tmpPath);
+            got.stream(safeUrl, {
+                timeout: { request: 600000 }, // 10 min; adjust as needed
+                headers: { 'user-agent': 'Mozilla/5.0' }
+            })
+                .on('error', reject)
+                .pipe(w)
+                .on('error', reject)
+                .on('finish', resolve);
+        });
+
+        await fs.rename(tmpPath, finalPath);
+
+        // Optional auto-transcode if video
+        const ext = (path.extname(filename).slice(1) || '').toLowerCase();
+        const isVideo = ['mp4', 'mkv', 'mov', 'webm', 'avi', 'm4v', 'wmv', 'flv'].includes(ext);
+        let jobId = null, hls = null;
+        if (transcode && isVideo) {
+            const name = path.parse(filename).name;
+            const outDir = path.join(HLS, name);
+            await fs.mkdir(outDir, { recursive: true });
+            const job = await q.add('hls', { src: finalPath, outDir, name });
+            jobId = job.id;
+            hls = `/hls/${encodeURIComponent(name)}/master.m3u8`;
+        }
+
+        res.json({ ok: true, filename, path: path.join(destRel, filename), jobId, hls });
+    } catch (e) {
+        res.status(400).json({ error: e.message });
     }
-
-    // Derive filename
-    let filename = null;
-    const cd = head.headers['content-disposition'];
-    if (cd) {
-      try {
-        const parsed = contentDisposition.parse(cd);
-        filename = parsed.parameters['filename*'] || parsed.parameters.filename || null;
-      } catch {}
-    }
-    if (!filename) {
-      const u = new URL(safeUrl);
-      const last = decodeURIComponent((u.pathname.split('/').pop() || '').trim());
-      filename = last || 'download.bin';
-    }
-
-    // Paths
-    const destDir = safe(destRel);
-    await fs.mkdir(destDir, { recursive: true });
-    const tmpPath = path.join(TMP, `dl_${Date.now()}_${Math.random().toString(36).slice(2)}`);
-    const finalPath = path.join(destDir, filename);
-
-    // Stream download
-    await new Promise((resolve, reject) => {
-      const w = fss.createWriteStream(tmpPath);
-      got.stream(safeUrl, {
-        timeout: { request: 600000 }, // 10 min; adjust as needed
-        headers: { 'user-agent': 'Mozilla/5.0' }
-      })
-      .on('error', reject)
-      .pipe(w)
-      .on('error', reject)
-      .on('finish', resolve);
-    });
-
-    await fs.rename(tmpPath, finalPath);
-
-    // Optional auto-transcode if video
-    const ext = (path.extname(filename).slice(1) || '').toLowerCase();
-    const isVideo = ['mp4','mkv','mov','webm','avi','m4v','wmv','flv'].includes(ext);
-    let jobId = null, hls = null;
-    if (transcode && isVideo) {
-      const name = path.parse(filename).name;
-      const outDir = path.join(HLS, name);
-      await fs.mkdir(outDir, { recursive: true });
-      const job = await q.add('hls', { src: finalPath, outDir, name });
-      jobId = job.id;
-      hls = `/hls/${encodeURIComponent(name)}/master.m3u8`;
-    }
-
-    res.json({ ok: true, filename, path: path.join(destRel, filename), jobId, hls });
-  } catch (e) {
-    res.status(400).json({ error: e.message });
-  }
 });
 
