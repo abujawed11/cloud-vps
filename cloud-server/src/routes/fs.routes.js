@@ -468,7 +468,7 @@ r.post('/upload', auth, upload.single('file'), async (req, res) => {
     const safeName = sanitizeFilename(req.file.originalname);
 
     // 2) optional: avoid overwriting existing file while keeping ≤255 bytes
-    const finalName = makeUniqueInDirSync(destDir, safeName, fsSync.existsSync);
+    const finalName = makeUniqueInDirSync(destDir, safeName, fss.existsSync);
 
     const dest = path.join(destDir, finalName);
 
