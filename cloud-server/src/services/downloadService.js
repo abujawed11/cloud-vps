@@ -88,7 +88,7 @@ import got from 'got';
 import path from 'node:path';
 import contentDisposition from 'content-disposition';
 import { TMP, MAX_DOWNLOAD_MB } from '../config/index.js';
-import { sanitizeBase } from '../utils/sanitize.js';
+import { sanitizeFilename } from '../utils/sanitizeFilename.js';
 
 const isPrivateIp = (ip) => {
   try {
@@ -115,21 +115,38 @@ async function assertSafeHttpUrlStrict(raw) {
   return u.toString();
 }
 
+
+
 export async function deriveFilenameFromHeadersOrUrl(url, headers) {
+  // try Content-Disposition first
   const cd = headers?.['content-disposition'];
   if (cd) {
     try {
       const parsed = contentDisposition.parse(cd);
-      const name =
-        parsed.parameters['filename*'] || parsed.parameters.filename;
-      if (name) return sanitizeBase(name);
+      const candidate = parsed.parameters['filename*'] || parsed.parameters.filename;
+      if (candidate) return sanitizeFilename(candidate);
     } catch {}
   }
-  const tail = decodeURIComponent(
-    (new URL(url).pathname.split('/').pop() || '').trim()
-  );
-  return sanitizeBase(tail || 'download.bin');
+  // fallback to URL tail
+  const tail = decodeURIComponent((new URL(url).pathname.split('/').pop() || '').trim());
+  return sanitizeFilename(tail || 'download.bin');
 }
+
+// export async function deriveFilenameFromHeadersOrUrl(url, headers) {
+//   const cd = headers?.['content-disposition'];
+//   if (cd) {
+//     try {
+//       const parsed = contentDisposition.parse(cd);
+//       const name =
+//         parsed.parameters['filename*'] || parsed.parameters.filename;
+//       if (name) return sanitizeBase(name);
+//     } catch {}
+//   }
+//   const tail = decodeURIComponent(
+//     (new URL(url).pathname.split('/').pop() || '').trim()
+//   );
+//   return sanitizeBase(tail || 'download.bin');
+// }
 
 /**
  * Download to a temp file.

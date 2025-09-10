@@ -370,6 +370,8 @@ import { safe, norm } from '../utils/safePath.js';
 import { mimeOf } from '../utils/mime.js';
 import { copyRecursive, moveCrossFsSafe } from '../services/fsService.js';
 import { transcodeQueue } from '../queue/bull.js';
+import { sanitizeFilename, makeUniqueInDirSync } from '../utils/sanitizeFilename.js';
+
 
 const r = Router();
 const upload = multer({ dest: TMP });
@@ -434,19 +436,57 @@ r.post('/cp', auth, async (req, res) => {
 });
 
 /* ---------- upload ---------- */
+// r.post('/upload', auth, upload.single('file'), async (req, res) => {
+//   try {
+//     const dest = safe(path.join(req.body.dest || '/', req.file.originalname));
+//     await fs.copyFile(req.file.path, dest);
+//     // No need to set CORS manually here; the global app CORS + r.options above handle it
+//     res.json({ ok: true, name: req.file.originalname });
+
+//     // optional auto-transcode
+//     const ext = (req.file.originalname.split('.').pop() || '').toLowerCase();
+//     const isVideo = ['mp4', 'mkv', 'mov', 'webm', 'avi', 'm4v', 'wmv', 'flv'].includes(ext);
+//     if (AUTO_TRANSCODE_UPLOAD && isVideo) {
+//       const name = path.parse(req.file.originalname).name;
+//       await transcodeQueue.add('hls', { src: dest, outDir: path.join(HLS, name), name });
+//     }
+//   } finally {
+//     if (req.file?.path) fs.rm(req.file.path, { force: true });
+//   }
+// });
+
+
 r.post('/upload', auth, upload.single('file'), async (req, res) => {
   try {
-    const dest = safe(path.join(req.body.dest || '/', req.file.originalname));
-    await fs.copyFile(req.file.path, dest);
-    // No need to set CORS manually here; the global app CORS + r.options above handle it
-    res.json({ ok: true, name: req.file.originalname });
+    if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
+
+    const destRelDir = req.body.dest || '/';
+    const destDir = safe(destRelDir);      // ensure directory is within ROOT
+    await fs.mkdir(destDir, { recursive: true });
+
+    // 1) sanitize
+    const safeName = sanitizeFilename(req.file.originalname);
+
+    // 2) optional: avoid overwriting existing file while keeping ≤255 bytes
+    const finalName = makeUniqueInDirSync(destDir, safeName, fsSync.existsSync);
+
+    const dest = path.join(destDir, finalName);
+
+    try {
+      await fs.copyFile(req.file.path, dest);
+    } catch (e) {
+      console.error('Upload copy failed:', e);
+      return res.status(400).json({ error: e.message || 'Upload failed' });
+    }
+
+    res.json({ ok: true, name: finalName, path: path.join(destRelDir, finalName) });
 
     // optional auto-transcode
-    const ext = (req.file.originalname.split('.').pop() || '').toLowerCase();
-    const isVideo = ['mp4', 'mkv', 'mov', 'webm', 'avi', 'm4v', 'wmv', 'flv'].includes(ext);
+    const ext = (finalName.split('.').pop() || '').toLowerCase();
+    const isVideo = ['mp4','mkv','mov','webm','avi','m4v','wmv','flv'].includes(ext);
     if (AUTO_TRANSCODE_UPLOAD && isVideo) {
-      const name = path.parse(req.file.originalname).name;
-      await transcodeQueue.add('hls', { src: dest, outDir: path.join(HLS, name), name });
+      const justName = path.parse(finalName).name;
+      await transcodeQueue.add('hls', { src: dest, outDir: path.join(HLS, justName), name: justName });
     }
   } finally {
     if (req.file?.path) fs.rm(req.file.path, { force: true });
