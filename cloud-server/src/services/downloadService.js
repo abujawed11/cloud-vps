@@ -83,6 +83,8 @@
 import fs from 'node:fs/promises';
 import fss from 'node:fs';
 import dns from 'node:dns/promises';
+import http from 'node:http';
+import https from 'node:https';
 import ipaddr from 'ipaddr.js';
 import got from 'got';
 import path from 'node:path';
@@ -165,9 +167,31 @@ export async function downloadToTemp(validUrl, onProgress) {
 
   await new Promise((resolve, reject) => {
     const stream = got.stream(validUrl, {
-      timeout: { request: 600000 },
-      headers: { 'user-agent': 'Mozilla/5.0' },
+      timeout: { 
+        request: 30000,
+        response: 60000 
+      },
+      headers: { 
+        'user-agent': 'Mozilla/5.0',
+        'accept-encoding': 'gzip, deflate, br'
+      },
       followRedirect: true,
+      retry: {
+        limit: 3,
+        methods: ['GET']
+      },
+      http2: true,
+      decompress: true,
+      agent: {
+        http: new http.Agent({
+          keepAlive: true,
+          maxSockets: 10
+        }),
+        https: new https.Agent({
+          keepAlive: true,
+          maxSockets: 10
+        })
+      }
     });
 
     stream.on('redirect', async (res) => {
