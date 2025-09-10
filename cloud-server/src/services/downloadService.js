@@ -165,31 +165,96 @@ export async function downloadToTemp(validUrl, onProgress) {
 
   await assertSafeHttpUrlStrict(validUrl);
 
+  // Attempt download with resume capability
+  let attempt = 0;
+  const maxAttempts = 3;
+  
+  while (attempt < maxAttempts) {
+    attempt++;
+    console.log(`Download attempt ${attempt}/${maxAttempts} for ${validUrl}`);
+    
+    try {
+      const downloadResult = await attemptDownload(validUrl, tmpPath, onProgress, limitBytes, attempt > 1);
+      
+      // Verify file size after successful download
+      const stats = await fs.stat(tmpPath);
+      const fileSize = stats.size;
+      
+      console.log(`Download completed: Expected=${downloadResult.expectedSize}, Actual=${downloadResult.actualBytes}, File=${fileSize}`);
+      
+      if (downloadResult.expectedSize && Math.abs(fileSize - downloadResult.expectedSize) > 1024) {
+        if (attempt < maxAttempts) {
+          console.log(`Size mismatch on attempt ${attempt}, retrying with resume...`);
+          continue;
+        } else {
+          throw new Error(`File size mismatch after ${maxAttempts} attempts: expected ${downloadResult.expectedSize}, got ${fileSize}`);
+        }
+      }
+      
+      return tmpPath;
+    } catch (error) {
+      console.log(`Download attempt ${attempt} failed:`, error.message);
+      if (attempt >= maxAttempts) {
+        throw error;
+      }
+      // Wait before retry
+      await new Promise(resolve => setTimeout(resolve, 2000 * attempt));
+    }
+  }
+}
+
+async function attemptDownload(validUrl, tmpPath, onProgress, limitBytes, isResume = false) {
+  let startByte = 0;
+  
+  // Check if partial file exists for resume
+  if (isResume) {
+    try {
+      const stats = await fs.stat(tmpPath);
+      startByte = stats.size;
+      console.log(`Resuming download from byte ${startByte}`);
+    } catch {
+      startByte = 0;
+    }
+  }
+
   const downloadResult = await new Promise((resolve, reject) => {
     const stream = got.stream(validUrl, {
       timeout: { 
-        request: 30000,
-        response: 60000 
+        request: 120000,  // 2 minutes to establish connection
+        response: 300000, // 5 minutes between data chunks
+        send: 60000,      // 1 minute to send request
+        lookup: 30000     // 30 seconds for DNS lookup
       },
       headers: { 
-        'user-agent': 'Mozilla/5.0',
-        'accept-encoding': 'gzip, deflate, br'
+        'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+        'accept': '*/*',
+        'accept-encoding': 'identity', // Disable compression for large files
+        'connection': 'keep-alive',
+        ...(startByte > 0 ? { 'range': `bytes=${startByte}-` } : {})
       },
       followRedirect: true,
       retry: {
-        limit: 3,
-        methods: ['GET']
+        limit: 5,
+        methods: ['GET'],
+        statusCodes: [408, 413, 429, 500, 502, 503, 504, 521, 522, 524],
+        errorCodes: ['ETIMEDOUT', 'ECONNRESET', 'EADDRINUSE', 'ECONNREFUSED', 'EPIPE', 'ENOTFOUND', 'ENETUNREACH', 'EAI_AGAIN']
       },
-      http2: true,
-      decompress: true,
+      http2: false, // Disable HTTP/2 for better compatibility
+      decompress: false, // Handle decompression manually
       agent: {
         http: new http.Agent({
           keepAlive: true,
-          maxSockets: 10
+          keepAliveMsecs: 60000,
+          maxSockets: 5,
+          maxFreeSockets: 2,
+          timeout: 300000
         }),
         https: new https.Agent({
           keepAlive: true,
-          maxSockets: 10
+          keepAliveMsecs: 60000,
+          maxSockets: 5,
+          maxFreeSockets: 2,
+          timeout: 300000
         })
       }
     });
@@ -199,9 +264,19 @@ export async function downloadToTemp(validUrl, onProgress) {
 
     stream.on('response', (response) => {
       const contentLength = response.headers['content-length'];
-      if (contentLength) {
-        expectedSize = parseInt(contentLength, 10);
+      const contentRange = response.headers['content-range'];
+      
+      if (contentRange) {
+        // Parse content-range: bytes 1024-2047/2048
+        const match = contentRange.match(/bytes \d+-\d+\/(\d+)/);
+        if (match) {
+          expectedSize = parseInt(match[1], 10);
+        }
+      } else if (contentLength) {
+        expectedSize = parseInt(contentLength, 10) + startByte;
       }
+      
+      console.log(`Response headers: Content-Length=${contentLength}, Content-Range=${contentRange}, Expected total size=${expectedSize}`);
     });
 
     stream.on('redirect', async (res) => {
@@ -214,7 +289,7 @@ export async function downloadToTemp(validUrl, onProgress) {
 
     stream.on('downloadProgress', (p) => {
       try {
-        actualBytes = p.transferred || 0;
+        actualBytes = (p.transferred || 0) + startByte;
         
         if (expectedSize && expectedSize > 0) {
           const pct = Math.round((actualBytes / expectedSize) * 100);
@@ -232,7 +307,7 @@ export async function downloadToTemp(validUrl, onProgress) {
       }
     });
 
-    const w = fss.createWriteStream(tmpPath);
+    const w = fss.createWriteStream(tmpPath, { flags: startByte > 0 ? 'a' : 'w' });
     let streamEnded = false;
     let writeStreamEnded = false;
 
@@ -267,16 +342,6 @@ export async function downloadToTemp(validUrl, onProgress) {
     stream.pipe(w);
   });
 
-  // Verify file size after download
-  const stats = await fs.stat(tmpPath);
-  const fileSize = stats.size;
-  
-  console.log(`Download completed: Expected=${downloadResult.expectedSize}, Actual=${downloadResult.actualBytes}, File=${fileSize}`);
-  
-  if (downloadResult.expectedSize && Math.abs(fileSize - downloadResult.expectedSize) > 1024) {
-    throw new Error(`File size mismatch: expected ${downloadResult.expectedSize}, got ${fileSize}`);
-  }
-
-  return tmpPath;
+  return downloadResult;
 }
 
