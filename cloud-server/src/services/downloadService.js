@@ -220,41 +220,49 @@ async function attemptDownload(validUrl, tmpPath, onProgress, limitBytes, isResu
   const downloadResult = await new Promise((resolve, reject) => {
     const stream = got.stream(validUrl, {
       timeout: { 
-        request: 120000,  // 2 minutes to establish connection
-        response: 300000, // 5 minutes between data chunks
-        send: 60000,      // 1 minute to send request
-        lookup: 30000     // 30 seconds for DNS lookup
+        request: 60000,   // 1 minute connection
+        response: 120000, // 2 minutes between chunks
+        send: 30000,      // 30 seconds to send
+        lookup: 10000     // 10 seconds DNS
       },
       headers: { 
-        'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+        'user-agent': 'curl/7.68.0', // Simpler user agent
         'accept': '*/*',
-        'accept-encoding': 'identity', // Disable compression for large files
+        'accept-encoding': 'identity',
         'connection': 'keep-alive',
+        'cache-control': 'no-cache',
+        'pragma': 'no-cache',
         ...(startByte > 0 ? { 'range': `bytes=${startByte}-` } : {})
       },
       followRedirect: true,
+      maxRedirects: 5,
       retry: {
-        limit: 5,
+        limit: 3,
         methods: ['GET'],
         statusCodes: [408, 413, 429, 500, 502, 503, 504, 521, 522, 524],
-        errorCodes: ['ETIMEDOUT', 'ECONNRESET', 'EADDRINUSE', 'ECONNREFUSED', 'EPIPE', 'ENOTFOUND', 'ENETUNREACH', 'EAI_AGAIN']
+        errorCodes: ['ETIMEDOUT', 'ECONNRESET', 'ECONNREFUSED', 'EPIPE', 'ENOTFOUND', 'ENETUNREACH', 'EAI_AGAIN']
       },
-      http2: false, // Disable HTTP/2 for better compatibility
-      decompress: false, // Handle decompression manually
+      http2: false,
+      decompress: false,
+      dnsCache: true,
+      dnsLookupIpVersion: 'ipv4',
       agent: {
         http: new http.Agent({
           keepAlive: true,
-          keepAliveMsecs: 60000,
-          maxSockets: 5,
-          maxFreeSockets: 2,
-          timeout: 300000
+          keepAliveMsecs: 30000,
+          maxSockets: 3,        // Reduced concurrent connections
+          maxFreeSockets: 1,
+          timeout: 120000,
+          scheduling: 'fifo'
         }),
         https: new https.Agent({
           keepAlive: true,
-          keepAliveMsecs: 60000,
-          maxSockets: 5,
-          maxFreeSockets: 2,
-          timeout: 300000
+          keepAliveMsecs: 30000,
+          maxSockets: 3,        // Reduced concurrent connections  
+          maxFreeSockets: 1,
+          timeout: 120000,
+          scheduling: 'fifo',
+          secureProtocol: 'TLSv1_2_method' // Force TLS 1.2
         })
       }
     });
