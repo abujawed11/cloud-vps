@@ -165,7 +165,7 @@ export async function downloadToTemp(validUrl, onProgress) {
 
   await assertSafeHttpUrlStrict(validUrl);
 
-  await new Promise((resolve, reject) => {
+  const downloadResult = await new Promise((resolve, reject) => {
     const stream = got.stream(validUrl, {
       timeout: { 
         request: 30000,
@@ -194,6 +194,16 @@ export async function downloadToTemp(validUrl, onProgress) {
       }
     });
 
+    let expectedSize = null;
+    let actualBytes = 0;
+
+    stream.on('response', (response) => {
+      const contentLength = response.headers['content-length'];
+      if (contentLength) {
+        expectedSize = parseInt(contentLength, 10);
+      }
+    });
+
     stream.on('redirect', async (res) => {
       try {
         await assertSafeHttpUrlStrict(res.responseUrl);
@@ -202,29 +212,70 @@ export async function downloadToTemp(validUrl, onProgress) {
       }
     });
 
-    let transferred = 0;
     stream.on('downloadProgress', (p) => {
       try {
-        if (p?.total) {
-          const pct = Math.round((p.transferred / p.total) * 100);
-          if (onProgress) onProgress(pct);
+        actualBytes = p.transferred || 0;
+        
+        if (expectedSize && expectedSize > 0) {
+          const pct = Math.round((actualBytes / expectedSize) * 100);
+          if (onProgress) onProgress(Math.min(pct, 99));
         } else if (p?.percent) {
           const pct = Math.min(99, Math.round(p.percent * 100));
           if (onProgress) onProgress(pct);
         }
-        transferred = p.transferred || transferred;
-        if (limitBytes && transferred > limitBytes) {
+        
+        if (limitBytes && actualBytes > limitBytes) {
           stream.destroy(new Error('Max size exceeded'));
         }
-      } catch {}
+      } catch (e) {
+        console.error('Progress tracking error:', e);
+      }
     });
 
     const w = fss.createWriteStream(tmpPath);
-    stream.on('error', reject)
-      .pipe(w)
-      .on('error', reject)
-      .on('finish', resolve);
+    let streamEnded = false;
+    let writeStreamEnded = false;
+
+    stream.on('error', (err) => {
+      console.error('Download stream error:', err);
+      w.destroy();
+      reject(err);
+    });
+
+    w.on('error', (err) => {
+      console.error('Write stream error:', err);
+      stream.destroy();
+      reject(err);
+    });
+
+    stream.on('end', () => {
+      streamEnded = true;
+      if (writeStreamEnded) {
+        resolve({ expectedSize, actualBytes });
+      }
+    });
+
+    w.on('finish', async () => {
+      writeStreamEnded = true;
+      if (streamEnded) {
+        // Final progress update
+        if (onProgress) onProgress(100);
+        resolve({ expectedSize, actualBytes });
+      }
+    });
+
+    stream.pipe(w);
   });
+
+  // Verify file size after download
+  const stats = await fs.stat(tmpPath);
+  const fileSize = stats.size;
+  
+  console.log(`Download completed: Expected=${downloadResult.expectedSize}, Actual=${downloadResult.actualBytes}, File=${fileSize}`);
+  
+  if (downloadResult.expectedSize && Math.abs(fileSize - downloadResult.expectedSize) > 1024) {
+    throw new Error(`File size mismatch: expected ${downloadResult.expectedSize}, got ${fileSize}`);
+  }
 
   return tmpPath;
 }
