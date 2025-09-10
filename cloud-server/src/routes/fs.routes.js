@@ -99,6 +99,18 @@ r.get('/download', auth, async (req,res) => {
   fss.createReadStream(full, { start, end }).pipe(res);
 });
 
+r.get('/text', auth, async (req,res) => {
+  const full = safe(req.query.path);
+  const text = await fs.readFile(full, 'utf8');
+  res.json({ text });
+});
+
+r.put('/text', auth, async (req,res) => {
+  const full = safe(req.body.path);
+  await fs.writeFile(full, req.body.text, 'utf8');
+  res.json({ ok: true });
+});
+
 r.get('/thumb', auth, async (req,res) => {
   // (You can port your thumb logic here later; keep it out of the hot path for now)
   res.status(501).json({ error: 'Not implemented in modular split yet' });
