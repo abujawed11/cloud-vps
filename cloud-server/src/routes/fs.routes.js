@@ -74,8 +74,17 @@ r.get('/download', auth, async (req,res) => {
   const st = await fs.stat(full);
   const range = req.headers.range;
 
+  // CORS headers for media files
+  const corsHeaders = {
+    'Access-Control-Allow-Origin': '*',
+    'Access-Control-Allow-Methods': 'GET, HEAD, OPTIONS',
+    'Access-Control-Allow-Headers': 'Range, Authorization, Content-Type',
+    'Access-Control-Expose-Headers': 'Content-Length, Content-Range, Accept-Ranges'
+  };
+
   if (!range) {
     res.writeHead(200, {
+      ...corsHeaders,
       'Content-Length': st.size,
       'Content-Type': mimeOf(full),
       'Content-Disposition': `inline; filename="${path.basename(full)}"`,
@@ -87,9 +96,14 @@ r.get('/download', auth, async (req,res) => {
   const start = Number.isNaN(s) ? 0 : s;
   const end   = Number.isNaN(e) ? st.size - 1 : e;
   if (start > end || end >= st.size) {
-    res.writeHead(416, { 'Content-Range': `bytes */${st.size}` }); return res.end();
+    res.writeHead(416, { 
+      ...corsHeaders,
+      'Content-Range': `bytes */${st.size}` 
+    }); 
+    return res.end();
   }
   res.writeHead(206, {
+    ...corsHeaders,
     'Content-Range': `bytes ${start}-${end}/${st.size}`,
     'Accept-Ranges': 'bytes',
     'Content-Length': end - start + 1,
