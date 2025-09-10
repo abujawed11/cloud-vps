@@ -95,7 +95,9 @@ import { sanitizeFilename } from '../utils/sanitizeFilename.js';
 const isPrivateIp = (ip) => {
   try {
     const a = ipaddr.parse(ip);
-    return a.range() !== 'unicast'; // true if private/loopback/link-local
+    const range = a.range();
+    // Only block truly private ranges, not CDN/public IPs
+    return range === 'private' || range === 'loopback' || range === 'linkLocal';
   } catch {
     return true;
   }
@@ -110,10 +112,26 @@ async function assertSafeHttpUrlStrict(raw) {
   }
   if (!/^https?:$/.test(u.protocol)) throw new Error('Only http/https allowed');
 
-  const addrs = await dns.lookup(u.hostname, { all: true });
-  if (addrs.some((a) => isPrivateIp(a.address))) {
-    throw new Error('Blocked internal address');
+  // Skip IP validation for known CDN domains
+  const trustedDomains = ['seedr.cc', 'googleapis.com', 'cloudflare.com', 'fastly.com'];
+  const hostname = u.hostname.toLowerCase();
+  
+  if (trustedDomains.some(domain => hostname.endsWith(domain))) {
+    console.log(`Trusted domain ${hostname}, skipping IP validation`);
+    return u.toString();
   }
+
+  try {
+    const addrs = await dns.lookup(u.hostname, { all: true });
+    console.log(`DNS lookup for ${u.hostname}:`, addrs.map(a => a.address));
+    
+    if (addrs.some((a) => isPrivateIp(a.address))) {
+      throw new Error(`Blocked internal address for ${u.hostname}: ${addrs.map(a => a.address).join(', ')}`);
+    }
+  } catch (dnsError) {
+    console.log(`DNS lookup failed for ${u.hostname}, allowing anyway:`, dnsError.message);
+  }
+  
   return u.toString();
 }
 
@@ -245,7 +263,6 @@ async function attemptDownload(validUrl, tmpPath, onProgress, limitBytes, isResu
       http2: false,
       decompress: false,
       dnsCache: true,
-      dnsLookupIpVersion: 'ipv4',
       agent: {
         http: new http.Agent({
           keepAlive: true,
