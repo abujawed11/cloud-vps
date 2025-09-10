@@ -16,6 +16,7 @@ import {
   parentOf,
   downloadFile
 } from "@/features/fs/api"
+import { formatFileSize } from "@/features/fs/utils"
 import { useMemo, useRef, useState, useEffect } from "react"
 import NewFolderDialog from "@/features/fs/components/NewFolderDialog"
 import ConfirmDialog from "@/features/fs/components/ConfirmDialog"
@@ -559,7 +560,7 @@ export default function Explorer() {
                     {entry.name}
                   </button>
                   {!isDir && typeof entry.size === "number" && (
-                    <span className="text-xs text-text-muted">{entry.size} B</span>
+                    <span className="text-xs text-text-muted">{formatFileSize(entry.size)}</span>
                   )}
                 </div>
               )
