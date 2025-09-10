@@ -11,6 +11,5 @@ export default defineConfig({
       "@": fileURLToPath(new URL("./src", import.meta.url)),
     },
   },
-  // optional niceties:
-  // server: { host: true, port: 5173 }, // expose on LAN, pick a fixed port
+  // No proxy needed - using hosted backend directly via .env
 })

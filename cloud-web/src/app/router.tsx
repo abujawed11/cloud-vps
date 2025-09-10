@@ -2,6 +2,8 @@ import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom"
 import Login from "@/pages/Login"
 import Explorer from "@/pages/Explorer"
 import TextEditorPage from "@/pages/TextEditorPage"
+import ImageViewerPage from "@/pages/ImageViewerPage"
+import VideoPlayerPage from "@/pages/VideoPlayerPage"
 import NotFound from "@/pages/NotFound"
 import { ProtectedRoute } from "@/features/auth/ProtectedRoute"
 
@@ -15,6 +17,8 @@ export default function AppRouter() {
           <Route index element={<Navigate to="/explorer" replace />} />
           <Route path="/explorer" element={<Explorer />} />
           <Route path="/editor" element={<TextEditorPage />} />
+          <Route path="/image-viewer" element={<ImageViewerPage />} />
+          <Route path="/video-player" element={<VideoPlayerPage />} />
         </Route>
 
         <Route path="*" element={<NotFound />} />

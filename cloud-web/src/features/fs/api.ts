@@ -208,3 +208,18 @@ export function downloadFile(path: string, filename?: string) {
     document.body.removeChild(link)
   }
 }
+
+
+
+// fs.ts (your current file with listFs, mkdirAt, etc.)
+
+export function buildMediaUrl(filePath: string) {
+  const base = (api.defaults.baseURL || '').replace(/\/$/, '');
+  const url = new URL(base + '/fs/download');
+  url.searchParams.set('path', filePath);
+
+  const token = localStorage.getItem('auth_token');
+  if (token) url.searchParams.set('token', token);
+
+  return url.toString();
+}

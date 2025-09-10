@@ -16,7 +16,7 @@ import {
   parentOf,
   downloadFile
 } from "@/features/fs/api"
-import { formatFileSize } from "@/features/fs/utils"
+import { formatFileSize, getFileType, getFileIcon } from "@/features/fs/utils"
 import { useMemo, useRef, useState, useEffect } from "react"
 import NewFolderDialog from "@/features/fs/components/NewFolderDialog"
 import ConfirmDialog from "@/features/fs/components/ConfirmDialog"
@@ -123,10 +123,21 @@ export default function Explorer() {
       setParams({ path: next })
     } else {
       const p = entry.path || (path.endsWith("/") ? path + entry.name : path + "/" + entry.name)
-      if (entry.name.endsWith(".txt")) {
-        nav(`/editor?path=${encodeURIComponent(p)}`)
-      } else {
-        info(`File Preview: Preview for "${entry.name}" not implemented yet`)
+      const fileType = getFileType(entry.name)
+      
+      switch (fileType) {
+        case 'image':
+          nav(`/image-viewer?path=${encodeURIComponent(p)}`)
+          break
+        case 'video':
+          nav(`/video-player?path=${encodeURIComponent(p)}`)
+          break
+        case 'text':
+        case 'code':
+          nav(`/editor?path=${encodeURIComponent(p)}`)
+          break
+        default:
+          info(`File Preview: Preview for "${entry.name}" (${fileType}) not implemented yet`)
       }
     }
   }
@@ -554,7 +565,7 @@ export default function Explorer() {
                     onClick={(ev)=>ev.stopPropagation()}
                   />
                   <button className="w-6" onClick={()=>toggleSelect(p)} title={checked ? "Unselect" : "Select"}>
-                    {isDir ? "📁" : "📄"}
+                    {isDir ? "📁" : getFileIcon(entry.name)}
                   </button>
                   <button className="flex-1 text-left" onDoubleClick={() => open(entry)}>
                     {entry.name}
