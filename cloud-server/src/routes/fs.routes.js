@@ -223,49 +223,162 @@ r.post('/upload', auth, upload.single('file'), async (req, res) => {
 
 /* ---------- download (with Range + CORS) ---------- */
 // Handle preflight OPTIONS
+
+/* ---------- download (with Range + CORS, robust) ---------- */
 r.options('/download', (req, res) => {
-  res.set(corsHeaders);
+  res.set({
+    'Access-Control-Allow-Origin': '*', // 🔒 set to your domain in prod
+    'Access-Control-Allow-Methods': 'GET, HEAD, OPTIONS',
+    'Access-Control-Allow-Headers': 'Range, Authorization, Content-Type',
+    'Access-Control-Expose-Headers': 'Content-Length, Content-Range, Accept-Ranges'
+  });
   res.sendStatus(200);
 });
 
 r.get('/download', auth, async (req, res) => {
   const full = safe(req.query.path);
   const st = await fs.stat(full);
+  const size = st.size;
   const range = req.headers.range;
 
+  // Common headers for all responses
+  const baseHeaders = {
+    'Access-Control-Allow-Origin': '*', // 🔒 set to https://cloud.noteshandling.in in prod
+    'Access-Control-Expose-Headers': 'Content-Length, Content-Range, Accept-Ranges',
+    'Accept-Ranges': 'bytes',
+    'Content-Type': mimeOf(full),
+    'Cache-Control': 'private, max-age=3600',
+    'Content-Disposition': `inline; filename="${path.basename(full)}"`
+  };
+
+  // HEAD requests: send headers only (no body)
+  if (req.method === 'HEAD') {
+    res.writeHead(200, { ...baseHeaders, 'Content-Length': size });
+    return res.end();
+  }
+
   if (!range) {
-    res.writeHead(200, {
-      ...corsHeaders,
-      'Content-Length': st.size,
-      'Content-Type': mimeOf(full),
-      'Content-Disposition': `inline; filename="${path.basename(full)}"`,
-      'Cache-Control': 'private, max-age=3600'
-    });
+    // Full-content response
+    res.writeHead(200, { ...baseHeaders, 'Content-Length': size });
     return fss.createReadStream(full).pipe(res);
   }
 
-  const [s, e] = range.replace(/bytes=/, '').split('-').map(Number);
-  const start = Number.isNaN(s) ? 0 : s;
-  const end = Number.isNaN(e) ? st.size - 1 : e;
-
-  if (start > end || end >= st.size) {
+  // ---- Robust Range parsing ----
+  // Accept:
+  //   bytes=START-
+  //   bytes=START-END
+  //   bytes=-SUFFIX_LENGTH
+  let start, end;
+  const m = /^bytes=(\d*)-(\d*)$/.exec(range);
+  if (!m) {
+    // Malformed Range -> 416 with required header
     res.writeHead(416, {
-      ...corsHeaders,
-      'Content-Range': `bytes */${st.size}`
+      ...baseHeaders,
+      'Content-Range': `bytes */${size}`
     });
     return res.end();
   }
 
+  const startStr = m[1];
+  const endStr = m[2];
+
+  if (startStr === '' && endStr === '') {
+    // "bytes=-" (invalid)
+    res.writeHead(416, {
+      ...baseHeaders,
+      'Content-Range': `bytes */${size}`
+    });
+    return res.end();
+  }
+
+  if (startStr === '') {
+    // Suffix range: last N bytes
+    const suffixLength = parseInt(endStr, 10);
+    if (isNaN(suffixLength)) {
+      res.writeHead(416, { ...baseHeaders, 'Content-Range': `bytes */${size}` });
+      return res.end();
+    }
+    if (suffixLength === 0) {
+      // last 0 bytes -> empty but valid
+      start = size; // will produce empty body
+      end = size - 1;
+    } else {
+      start = Math.max(0, size - suffixLength);
+      end = size - 1;
+    }
+  } else {
+    start = parseInt(startStr, 10);
+    end = endStr ? parseInt(endStr, 10) : size - 1;
+  }
+
+  // Clamp end to EOF
+  if (end >= size) end = size - 1;
+
+  // Validate now
+  if (isNaN(start) || isNaN(end) || start < 0 || start > end || start >= size) {
+    res.writeHead(416, {
+      ...baseHeaders,
+      'Content-Range': `bytes */${size}`
+    });
+    return res.end();
+  }
+
+  const chunkSize = end - start + 1;
   res.writeHead(206, {
-    ...corsHeaders,
-    'Content-Range': `bytes ${start}-${end}/${st.size}`,
-    'Accept-Ranges': 'bytes',
-    'Content-Length': end - start + 1,
-    'Content-Type': mimeOf(full),
-    'Cache-Control': 'private, max-age=3600'
+    ...baseHeaders,
+    'Content-Range': `bytes ${start}-${end}/${size}`,
+    'Content-Length': chunkSize
   });
-  fss.createReadStream(full, { start, end }).pipe(res);
+
+  const stream = fss.createReadStream(full, { start, end });
+  stream.pipe(res);
 });
+
+
+
+// r.options('/download', (req, res) => {
+//   res.set(corsHeaders);
+//   res.sendStatus(200);
+// });
+
+// r.get('/download', auth, async (req, res) => {
+//   const full = safe(req.query.path);
+//   const st = await fs.stat(full);
+//   const range = req.headers.range;
+
+//   if (!range) {
+//     res.writeHead(200, {
+//       ...corsHeaders,
+//       'Content-Length': st.size,
+//       'Content-Type': mimeOf(full),
+//       'Content-Disposition': `inline; filename="${path.basename(full)}"`,
+//       'Cache-Control': 'private, max-age=3600'
+//     });
+//     return fss.createReadStream(full).pipe(res);
+//   }
+
+//   const [s, e] = range.replace(/bytes=/, '').split('-').map(Number);
+//   const start = Number.isNaN(s) ? 0 : s;
+//   const end = Number.isNaN(e) ? st.size - 1 : e;
+
+//   if (start > end || end >= st.size) {
+//     res.writeHead(416, {
+//       ...corsHeaders,
+//       'Content-Range': `bytes */${st.size}`
+//     });
+//     return res.end();
+//   }
+
+//   res.writeHead(206, {
+//     ...corsHeaders,
+//     'Content-Range': `bytes ${start}-${end}/${st.size}`,
+//     'Accept-Ranges': 'bytes',
+//     'Content-Length': end - start + 1,
+//     'Content-Type': mimeOf(full),
+//     'Cache-Control': 'private, max-age=3600'
+//   });
+//   fss.createReadStream(full, { start, end }).pipe(res);
+// });
 
 /* ---------- text files ---------- */
 r.get('/text', auth, async (req, res) => {
