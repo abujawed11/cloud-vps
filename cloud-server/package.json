@@ -12,11 +12,15 @@
   "type": "commonjs",
   "dependencies": {
     "bullmq": "^5.58.5",
+    "content-disposition": "^1.0.0",
     "cors": "^2.8.5",
+    "dotenv": "^17.2.2",
     "express": "^5.1.0",
     "express-rate-limit": "^8.1.0",
+    "got": "^14.4.8",
     "helmet": "^8.1.0",
     "ioredis": "^5.7.0",
+    "ipaddr.js": "^2.2.0",
     "jsonwebtoken": "^9.0.2",
     "mime-types": "^3.0.1",
     "multer": "^2.0.2"
