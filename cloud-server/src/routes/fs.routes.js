@@ -382,6 +382,28 @@ const upload = multer({
   }
 });
 
+// Wrapper to add timing to multer
+const timedUpload = (req, res, next) => {
+  const multerStart = Date.now();
+  console.log(`⬆️ Starting file reception from client...`);
+  
+  upload.single('file')(req, res, (err) => {
+    const multerTime = Date.now() - multerStart;
+    if (req.file) {
+      const mbps = (req.file.size / (1024*1024)) / (multerTime / 1000);
+      console.log(`📨 File reception complete: ${multerTime}ms (${mbps.toFixed(2)} MB/s from client)`);
+    } else {
+      console.log(`📨 File reception took: ${multerTime}ms (no file received)`);
+    }
+    
+    if (err) {
+      console.error('Multer error:', err);
+      return res.status(400).json({ error: err.message });
+    }
+    next();
+  });
+};
+
 // 👇 Use one place to define the allowed origin (override via env in prod)
 const ALLOW_ORIGIN = process.env.CORS_ORIGIN || 'https://cloud.noteshandling.in';
 
@@ -465,28 +487,46 @@ r.post('/cp', auth, async (req, res) => {
 // });
 
 
-r.post('/upload', auth, upload.single('file'), async (req, res) => {
+r.post('/upload', auth, timedUpload, async (req, res) => {
+  const uploadStart = Date.now();
   try {
     if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
 
+    console.log(`🔄 Upload started: ${req.file.originalname} (${(req.file.size / (1024*1024)).toFixed(2)}MB)`);
+    
     const destRelDir = req.body.dest || '/';
     const destDir = safe(destRelDir);      // ensure directory is within ROOT
+    
+    const mkdirStart = Date.now();
     await fs.mkdir(destDir, { recursive: true });
+    console.log(`📁 Directory creation: ${Date.now() - mkdirStart}ms`);
 
     // 1) sanitize
+    const sanitizeStart = Date.now();
     const safeName = sanitizeFilename(req.file.originalname);
+    console.log(`🧹 Filename sanitization: ${Date.now() - sanitizeStart}ms`);
 
     // 2) optional: avoid overwriting existing file while keeping ≤255 bytes
+    const uniqueStart = Date.now();
     const finalName = makeUniqueInDirSync(destDir, safeName, fss.existsSync);
+    console.log(`🔢 Unique name generation: ${Date.now() - uniqueStart}ms`);
 
     const dest = path.join(destDir, finalName);
 
     try {
+      const copyStart = Date.now();
       await fs.copyFile(req.file.path, dest);
+      const copyTime = Date.now() - copyStart;
+      const mbps = (req.file.size / (1024*1024)) / (copyTime / 1000);
+      console.log(`📋 File copy: ${copyTime}ms (${mbps.toFixed(2)} MB/s)`);
     } catch (e) {
       console.error('Upload copy failed:', e);
       return res.status(400).json({ error: e.message || 'Upload failed' });
     }
+
+    const totalTime = Date.now() - uploadStart;
+    const totalMbps = (req.file.size / (1024*1024)) / (totalTime / 1000);
+    console.log(`✅ Upload complete: ${totalTime}ms total (${totalMbps.toFixed(2)} MB/s overall)`);
 
     res.json({ ok: true, name: finalName, path: path.join(destRelDir, finalName) });
 
