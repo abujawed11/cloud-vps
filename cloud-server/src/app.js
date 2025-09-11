@@ -60,12 +60,22 @@ const corsMiddleware = cors({
 
 app.use(corsMiddleware);
 // answer ALL preflight requests with proper headers
-app.options('*', corsMiddleware);
+app.use((req, res, next) => {
+  if (req.method === 'OPTIONS') {
+    corsMiddleware(req, res, next);
+  } else {
+    next();
+  }
+});
 
 /* ----------------- Security & parsing ----------------- */
 app.use(helmet());
-app.use(express.json({ limit: '2mb' }));
-app.use(rateLimit({ windowMs: 60_000, max: 120 }));
+app.use(express.json({ limit: '10mb' }));
+app.use(rateLimit({ 
+  windowMs: 60_000, 
+  max: 1000,  // Much higher limit for file uploads
+  skip: (req) => req.path.includes('/fs/upload') // Skip rate limiting for uploads
+}));
 
 /* ----------------- Health ----------------- */
 app.get('/health', (_req, res) => res.json({ ok: true }));

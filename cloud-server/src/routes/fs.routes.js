@@ -374,21 +374,30 @@ import { sanitizeFilename, makeUniqueInDirSync } from '../utils/sanitizeFilename
 
 
 const r = Router();
-const upload = multer({ dest: TMP });
+const upload = multer({ 
+  dest: TMP,
+  limits: {
+    fileSize: 1024 * 1024 * 1024 * 2, // 2GB max file size
+    fieldSize: 10 * 1024 * 1024 // 10MB for form fields
+  }
+});
 
 // 👇 Use one place to define the allowed origin (override via env in prod)
 const ALLOW_ORIGIN = process.env.CORS_ORIGIN || 'https://cloud.noteshandling.in';
 
 /* ---------- generic preflight for everything under /fs/* ---------- */
-r.options('*', (req, res) => {
-  res.set({
-    'Access-Control-Allow-Origin': req.headers.origin || ALLOW_ORIGIN,
-    'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, HEAD, OPTIONS',
-    'Access-Control-Allow-Headers': 'Authorization, Content-Type, Range',
-    'Access-Control-Expose-Headers': 'Content-Length, Content-Range, Accept-Ranges',
-    'Access-Control-Allow-Credentials': 'true',
-  });
-  res.sendStatus(200);
+r.use((req, res, next) => {
+  if (req.method === 'OPTIONS') {
+    res.set({
+      'Access-Control-Allow-Origin': req.headers.origin || ALLOW_ORIGIN,
+      'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, HEAD, OPTIONS',
+      'Access-Control-Allow-Headers': 'Authorization, Content-Type, Range',
+      'Access-Control-Expose-Headers': 'Content-Length, Content-Range, Accept-Ranges',
+      'Access-Control-Allow-Credentials': 'true',
+    });
+    return res.sendStatus(200);
+  }
+  next();
 });
 
 /* ---------- FS list ---------- */
