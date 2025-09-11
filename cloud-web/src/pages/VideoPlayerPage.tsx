@@ -1,5 +1,5 @@
 import { useSearchParams } from "react-router-dom"
-import VideoPlayer from "@/features/viewer/components/VideoPlayer"
+import NetflixVideoPlayer from "@/features/viewer/components/NetflixVideoPlayer"
 
 export default function VideoPlayerPage() {
   const [params] = useSearchParams()
@@ -18,5 +18,5 @@ export default function VideoPlayerPage() {
   const token = localStorage.getItem("auth_token")
   const videoUrl = `https://cloud.noteshandling.in/api/fs/download?path=${encodeURIComponent(path)}&token=${token}`
 
-  return <VideoPlayer src={path} filename={filename} />
+  return <NetflixVideoPlayer src={path} filename={filename} />
 }
