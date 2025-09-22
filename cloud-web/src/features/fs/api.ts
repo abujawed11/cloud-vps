@@ -223,3 +223,12 @@ export function buildMediaUrl(filePath: string) {
 
   return url.toString();
 }
+
+/* ---------- JWT-signed link generation for VLC streaming ---------- */
+export async function generateDirectLink(filePath: string, asAttachment = false): Promise<string> {
+  const { data } = await api.post("/fs/generate-link", {
+    path: filePath,
+    asAttachment
+  })
+  return data.directUrl
+}

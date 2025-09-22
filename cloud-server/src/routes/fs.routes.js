@@ -371,6 +371,7 @@ import { mimeOf } from '../utils/mime.js';
 import { copyRecursive, moveCrossFsSafe } from '../services/fsService.js';
 import { transcodeQueue } from '../queue/bull.js';
 import { sanitizeFilename, makeUniqueInDirSync } from '../utils/sanitizeFilename.js';
+import { signLink, verifyLink, makeDirectLinkPayload } from '../services/linkSigner.js';
 
 
 const r = Router();
@@ -649,6 +650,139 @@ r.put('/text', auth, async (req, res) => {
 /* ---------- thumbs (todo) ---------- */
 r.get('/thumb', auth, async (_req, res) => {
   res.status(501).json({ error: 'Not implemented in modular split yet' });
+});
+
+/* ---------- direct streaming with JWT tokens (VLC-friendly) ---------- */
+r.get('/direct/:token', async (req, res) => {
+  try {
+    const token = req.params.token;
+    const payload = verifyLink(token);
+
+    if (!payload.path) {
+      return res.status(400).json({ error: 'Invalid token payload' });
+    }
+
+    const full = safe(payload.path);
+    const st = await fs.stat(full);
+    const size = st.size;
+    const range = req.headers.range;
+
+    // Common headers for all responses
+    const baseHeaders = {
+      'Access-Control-Allow-Origin': req.headers.origin || ALLOW_ORIGIN,
+      'Access-Control-Expose-Headers': 'Content-Length, Content-Range, Accept-Ranges',
+      'Access-Control-Allow-Credentials': 'true',
+      'Accept-Ranges': 'bytes',
+      'Content-Type': mimeOf(full),
+      'Cache-Control': 'private, max-age=3600',
+    };
+
+    // Set content disposition based on asAttachment flag
+    if (payload.asAttachment) {
+      baseHeaders['Content-Disposition'] = `attachment; filename*=UTF-8''${encodeURIComponent(path.basename(full))}`;
+    } else {
+      baseHeaders['Content-Disposition'] = `inline; filename="${path.basename(full)}"`;
+    }
+
+    // HEAD requests: headers only
+    if (req.method === 'HEAD') {
+      res.writeHead(200, { ...baseHeaders, 'Content-Length': size });
+      return res.end();
+    }
+
+    if (!range) {
+      res.writeHead(200, { ...baseHeaders, 'Content-Length': size });
+      return fss.createReadStream(full).pipe(res);
+    }
+
+    // Parse Range: bytes=START-END | START- | -SUFFIX
+    let start, end;
+    const m = /^bytes=(\d*)-(\d*)$/.exec(range);
+    if (!m) {
+      res.writeHead(416, { ...baseHeaders, 'Content-Range': `bytes */${size}` });
+      return res.end();
+    }
+
+    const startStr = m[1];
+    const endStr = m[2];
+
+    if (startStr === '' && endStr === '') {
+      res.writeHead(416, { ...baseHeaders, 'Content-Range': `bytes */${size}` });
+      return res.end();
+    }
+
+    if (startStr === '') {
+      // suffix range
+      const suffixLength = parseInt(endStr, 10);
+      if (isNaN(suffixLength)) {
+        res.writeHead(416, { ...baseHeaders, 'Content-Range': `bytes */${size}` });
+        return res.end();
+      }
+      if (suffixLength === 0) {
+        start = size;  // empty body
+        end = size - 1;
+      } else {
+        start = Math.max(0, size - suffixLength);
+        end = size - 1;
+      }
+    } else {
+      start = parseInt(startStr, 10);
+      end = endStr ? parseInt(endStr, 10) : size - 1;
+    }
+
+    if (end >= size) end = size - 1;
+    if (isNaN(start) || isNaN(end) || start < 0 || start > end || start >= size) {
+      res.writeHead(416, { ...baseHeaders, 'Content-Range': `bytes */${size}` });
+      return res.end();
+    }
+
+    const chunkSize = end - start + 1;
+    res.writeHead(206, {
+      ...baseHeaders,
+      'Content-Range': `bytes ${start}-${end}/${size}`,
+      'Content-Length': chunkSize,
+    });
+
+    fss.createReadStream(full, { start, end }).pipe(res);
+  } catch (error) {
+    console.error('Direct link error:', error);
+    return res.status(401).json({ error: 'Invalid or expired link' });
+  }
+});
+
+/* ---------- generate signed links (for authenticated users) ---------- */
+r.post('/generate-link', auth, async (req, res) => {
+  try {
+    const { path: filePath, asAttachment = false, expiresInSec } = req.body;
+
+    if (!filePath) {
+      return res.status(400).json({ error: 'Missing path parameter' });
+    }
+
+    // Validate the path exists and is accessible
+    const full = safe(filePath);
+    const st = await fs.stat(full);
+
+    if (!st.isFile()) {
+      return res.status(400).json({ error: 'Path is not a file' });
+    }
+
+    const payload = makeDirectLinkPayload({ path: filePath, asAttachment });
+    const token = signLink(payload, expiresInSec);
+
+    const baseURL = process.env.CORS_ORIGIN || 'https://cloud.noteshandling.in';
+    const directUrl = `${baseURL}/api/fs/direct/${token}`;
+
+    res.json({
+      directUrl,
+      token,
+      expiresIn: expiresInSec || (7 * 24 * 3600),
+      asAttachment
+    });
+  } catch (error) {
+    console.error('Generate link error:', error);
+    res.status(500).json({ error: 'Failed to generate link' });
+  }
 });
 
 export default r;

@@ -14,9 +14,11 @@ import {
   renameOne,
   joinPath,
   parentOf,
-  downloadFile
+  downloadFile,
+  generateDirectLink
 } from "@/features/fs/api"
 import { formatFileSize, getFileType, getFileIcon } from "@/features/fs/utils"
+import { api } from "@/lib/axios"
 import { useMemo, useRef, useState, useEffect } from "react"
 import NewFolderDialog from "@/features/fs/components/NewFolderDialog"
 import ConfirmDialog from "@/features/fs/components/ConfirmDialog"
@@ -30,6 +32,44 @@ import { ClipboardIndicator } from "@/components/ClipboardIndicator"
 
 type ClipMode = "copy" | "cut"
 type ClipboardState = { mode: ClipMode; items: string[]; sourceDir: string } | null
+
+/* ---------- helper functions for copy links ---------- */
+async function buildDirectDownloadLink(filePath: string): Promise<string> {
+  try {
+    // Generate JWT-signed direct link for downloading
+    return await generateDirectLink(filePath, true)
+  } catch (error) {
+    console.error('Failed to generate download link:', error)
+    // Fallback to old auth method if API fails
+    const baseURL = api.defaults.baseURL || "https://cloud.noteshandling.in/api"
+    const token = localStorage.getItem("auth_token")
+    const url = new URL(`${baseURL}/fs/download`)
+    url.searchParams.set("path", filePath)
+    if (token) url.searchParams.set("token", token)
+    return url.toString()
+  }
+}
+
+async function buildStreamableLink(filePath: string): Promise<string> {
+  try {
+    // Generate JWT-signed direct link for streaming (works perfectly with VLC)
+    return await generateDirectLink(filePath, false)
+  } catch (error) {
+    console.error('Failed to generate streamable link:', error)
+    // Fallback to old method if API fails
+    return buildDirectDownloadLink(filePath)
+  }
+}
+
+async function copyToClipboard(text: string, successMessage: string, errorMessage: string, showSuccess: (msg: string) => void, showError: (msg: string) => void) {
+  try {
+    await navigator.clipboard.writeText(text)
+    showSuccess(successMessage)
+  } catch (error) {
+    console.error('Failed to copy to clipboard:', error)
+    showError(errorMessage)
+  }
+}
 
 export default function Explorer() {
   const [params, setParams] = useSearchParams()
@@ -374,7 +414,7 @@ export default function Explorer() {
   function getContextMenuItems(entry: FsEntry, entryPath: string): ContextMenuItem[] {
     const isDir = entry.type === "dir" || entry.isDir || entry.isDirectory
     const isSelected = selected.has(entryPath)
-    
+
     const items: ContextMenuItem[] = []
 
     if (isSelected && selectedCount > 1) {
@@ -397,9 +437,31 @@ export default function Explorer() {
       // Single item context menu
       if (!isDir) {
         items.push({ label: "Download", icon: "⬇️", onClick: () => doDownload(entryPath) })
+
+        // Add copy link options for files
+        items.push(
+          { divider: true },
+          { label: "Copy Streamable Link", icon: "🔗", onClick: async () => {
+            try {
+              const streamableLink = await buildStreamableLink(entryPath)
+              copyToClipboard(streamableLink, "Streamable link copied to clipboard", "Failed to copy streamable link", success, showError)
+            } catch (error) {
+              showError("Failed to generate streamable link")
+            }
+          }},
+          { label: "Copy Direct Download Link", icon: "📎", onClick: async () => {
+            try {
+              const downloadLink = await buildDirectDownloadLink(entryPath)
+              copyToClipboard(downloadLink, "Download link copied to clipboard", "Failed to copy download link", success, showError)
+            } catch (error) {
+              showError("Failed to generate download link")
+            }
+          }}
+        )
       }
-      
+
       items.push(
+        { divider: true },
         { label: "Copy", icon: "📄", onClick: () => {
           //console.log('Copy item to clipboard:', entryPath)
           setClipboard({ mode: "copy", items: [entryPath], sourceDir: path })
