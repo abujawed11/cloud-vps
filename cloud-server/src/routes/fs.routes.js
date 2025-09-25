@@ -446,17 +446,30 @@ r.post('/mkdir', auth, async (req, res) => {
 });
 
 r.post('/rm', auth, async (req, res) => {
-  const p = safe(req.body.path);
-  console.log('DELETE DEBUG - req.body.path:', req.body.path);
-  console.log('DELETE DEBUG - resolved path p:', p);
-  console.log('DELETE DEBUG - ROOT:', ROOT);
-  console.log('DELETE DEBUG - p === ROOT:', p === ROOT);
+  try {
+    const p = safe(req.body.path);
+    console.log('DELETE DEBUG - req.body.path:', req.body.path);
+    console.log('DELETE DEBUG - resolved path p:', p);
+    console.log('DELETE DEBUG - ROOT:', ROOT);
+    console.log('DELETE DEBUG - p === ROOT:', p === ROOT);
 
-  if (p === ROOT) {
-    return res.status(400).json({ ok: false, error: 'Cannot delete root storage directory' });
+    if (p === ROOT) {
+      return res.status(400).json({ ok: false, error: 'Cannot delete root storage directory' });
+    }
+
+    await fs.rm(p, { recursive: true, force: true });
+    res.json({ ok: true });
+  } catch (error) {
+    console.error('DELETE ERROR:', error);
+
+    if (error.code === 'EACCES') {
+      return res.status(403).json({ ok: false, error: 'Permission denied: Cannot delete file' });
+    } else if (error.code === 'ENOENT') {
+      return res.status(404).json({ ok: false, error: 'File not found' });
+    } else {
+      return res.status(500).json({ ok: false, error: 'Failed to delete file: ' + error.message });
+    }
   }
-  await fs.rm(p, { recursive: true, force: true });
-  res.json({ ok: true });
 });
 
 r.post('/mv', auth, async (req, res) => {
