@@ -447,7 +447,9 @@ r.post('/mkdir', auth, async (req, res) => {
 
 r.post('/rm', auth, async (req, res) => {
   const p = safe(req.body.path);
-  if (p === ROOT) throw new Error('Cannot delete root storage directory');
+  if (p === ROOT) {
+    return res.status(400).json({ ok: false, error: 'Cannot delete root storage directory' });
+  }
   await fs.rm(p, { recursive: true, force: true });
   res.json({ ok: true });
 });
