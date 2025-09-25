@@ -447,6 +447,11 @@ r.post('/mkdir', auth, async (req, res) => {
 
 r.post('/rm', auth, async (req, res) => {
   const p = safe(req.body.path);
+  console.log('DELETE DEBUG - req.body.path:', req.body.path);
+  console.log('DELETE DEBUG - resolved path p:', p);
+  console.log('DELETE DEBUG - ROOT:', ROOT);
+  console.log('DELETE DEBUG - p === ROOT:', p === ROOT);
+
   if (p === ROOT) {
     return res.status(400).json({ ok: false, error: 'Cannot delete root storage directory' });
   }
